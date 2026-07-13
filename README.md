@@ -1,0 +1,1 @@
+Script for Deepgram Audio-to-Text API
