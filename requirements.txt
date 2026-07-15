@@ -3,3 +3,5 @@ deepgram-sdk
 yt-dlp
 pytest
 httpx
+openai
+boto3>=1.43.0

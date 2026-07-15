@@ -1,9 +1,20 @@
-import pytest
-from download import download_file
-from deepgram_api import transcribe_file, get_api_key
-from deepgram.core.api_error import ApiError
-from urllib.parse import urlparse
+from pathlib import Path
 from unittest.mock import Mock
+from urllib.parse import urlparse
+
+import pytest
+from deepgram.core.api_error import ApiError
+
+from deepgram_api import (
+    EMBEDDING_DIMENSIONS,
+    create_embedding,
+    create_summary,
+    get_api_key,
+    store_summary_vector,
+    transcribe_file,
+    vector_key_for,
+)
+from download import download_file
 
 
 def test_url_validation():
@@ -54,3 +65,61 @@ def test_transcription_failure():
     with pytest.raises(Exception):
         transcribe_file(None, None)  # Assuming the function raises an exception on failure
         assert False, "Transcription should have failed but didn't."
+
+
+def test_create_summary():
+    openai_client = Mock()
+    openai_client.responses.create.return_value.output_text = "  A short summary.  "
+
+    summary = create_summary(openai_client, "A transcript.", "summary-model")
+
+    assert summary == "A short summary."
+    openai_client.responses.create.assert_called_once()
+
+
+def test_create_embedding_uses_requested_model_and_dimensions():
+    openai_client = Mock()
+    openai_client.embeddings.create.return_value.data = [
+        Mock(embedding=[0.25] * EMBEDDING_DIMENSIONS)
+    ]
+
+    embedding = create_embedding(openai_client, "A short summary.")
+
+    assert len(embedding) == EMBEDDING_DIMENSIONS
+    openai_client.embeddings.create.assert_called_once_with(
+        model="text-embedding-3-small",
+        input="A short summary.",
+        dimensions=EMBEDDING_DIMENSIONS,
+        encoding_format="float",
+    )
+
+
+def test_store_summary_vector():
+    s3vectors = Mock()
+
+    store_summary_vector(
+        s3vectors=s3vectors,
+        bucket_name="videos",
+        index_name="summaries",
+        vector_key="audio-key",
+        embedding=[0.1] * EMBEDDING_DIMENSIONS,
+        metadata={"summary": "A short summary."},
+    )
+
+    request = s3vectors.put_vectors.call_args.kwargs
+    assert request["vectorBucketName"] == "videos"
+    assert request["indexName"] == "summaries"
+    assert request["vectors"][0]["key"] == "audio-key"
+    assert len(request["vectors"][0]["data"]["float32"]) == EMBEDDING_DIMENSIONS
+    assert request["vectors"][0]["metadata"]["summary"] == "A short summary."
+
+
+def test_store_summary_vector_rejects_wrong_dimensions():
+    with pytest.raises(ValueError, match="received 1 dimension"):
+        store_summary_vector(Mock(), "bucket", "index", "key", [0.1], {})
+
+
+def test_vector_key_is_deterministic():
+    assert vector_key_for(Path("Audio/example.mp3")) == vector_key_for(
+        Path("elsewhere/example.mp3")
+    )
