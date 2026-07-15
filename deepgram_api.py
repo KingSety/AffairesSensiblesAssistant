@@ -10,14 +10,19 @@ import httpx
 
 load_dotenv()
 
-DEEPGRAM_API_KEY = os.getenv("DEEPGRAM_API_KEY")
+def get_api_key() -> str:
+    api_key = os.getenv("DEEPGRAM_API_KEY")
+
+    if not api_key or not api_key.strip():
+        raise ValueError("DEEPGRAM_API_KEY not found.")
+
+    return api_key
+
+
 ROOT_DIR = Path(__file__).resolve().parent
 AUDIO_DIR = ROOT_DIR / "Audio"
 OUTPUT_DIR = ROOT_DIR / "Transcripts"
 OUTPUT_DIR.mkdir(exist_ok=True)
-
-if DEEPGRAM_API_KEY is None:
-    raise ValueError("API_KEY not found. Please check your .env file.")
 
 # Common audio/video extensions we want to accept
 AUDIO_EXTENSIONS = {
@@ -60,6 +65,7 @@ def transcribe_file(deepgram, audio_path: Path):
 
 
 def main():
+    DEEPGRAM_API_KEY = get_api_key()
     deepgram = DeepgramClient(api_key=DEEPGRAM_API_KEY)
     AUDIO_DIR.mkdir(parents=True, exist_ok=True)
 
