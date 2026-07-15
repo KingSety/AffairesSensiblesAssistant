@@ -1,10 +1,10 @@
 import pytest
 from download import download_file
-from deepgram_api import transcribe_file
+from deepgram_api import transcribe_file, get_api_key
 from deepgram.core.api_error import ApiError
 from urllib.parse import urlparse
 from unittest.mock import Mock
-from deepgram_api import get_api_key
+
 
 def test_url_validation():
     # Test valid URL
