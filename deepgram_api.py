@@ -2,12 +2,10 @@ import hashlib
 import mimetypes
 import os
 from pathlib import Path
-import struct
+import sqlite3
 import sys
 
-import boto3
 import httpx
-from botocore.exceptions import BotoCoreError, ClientError
 from deepgram import DeepgramClient
 from deepgram.core.api_error import ApiError
 from dotenv import load_dotenv
@@ -17,8 +15,6 @@ from openai import OpenAI, OpenAIError
 load_dotenv()
 
 
-EMBEDDING_MODEL = "text-embedding-3-small"
-EMBEDDING_DIMENSIONS = 1536
 DEFAULT_SUMMARY_MODEL = "gpt-4.1-mini"
 
 
@@ -41,6 +37,8 @@ OUTPUT_DIR = ROOT_DIR / "Transcripts"
 OUTPUT_DIR.mkdir(exist_ok=True)
 SUMMARY_DIR = ROOT_DIR / "Summaries"
 SUMMARY_DIR.mkdir(exist_ok=True)
+IOS_RESOURCES_DIR = ROOT_DIR / "ios" / "Resources"
+DATABASE_PATH = IOS_RESOURCES_DIR / "episodes.sqlite"
 
 # Common audio/video extensions we want to accept
 AUDIO_EXTENSIONS = {
@@ -105,50 +103,83 @@ def create_summary(openai_client, transcript: str, model: str) -> str:
     return summary
 
 
-def create_embedding(openai_client, summary: str) -> list[float]:
-    if not summary.strip():
-        raise ValueError("Cannot embed an empty summary.")
-
-    response = openai_client.embeddings.create(
-        model=EMBEDDING_MODEL,
-        input=summary,
-        dimensions=EMBEDDING_DIMENSIONS,
-        encoding_format="float",
-    )
-    return response.data[0].embedding
-
-
-def as_float32(values: list[float]) -> list[float]:
-    """Round Python floats to the float32 values required by S3 Vectors."""
-    return [struct.unpack("f", struct.pack("f", value))[0] for value in values]
-
-
-def store_summary_vector(
-    s3vectors,
-    bucket_name: str,
-    index_name: str,
-    vector_key: str,
-    embedding: list[float],
-    metadata: dict,
-) -> None:
-    if len(embedding) != EMBEDDING_DIMENSIONS:
-        unit = "dimension" if len(embedding) == 1 else "dimensions"
-        raise ValueError(
-            f"Expected a {EMBEDDING_DIMENSIONS}-dimension embedding, "
-            f"received {len(embedding)} {unit}."
+def initialize_database(database_path: Path = DATABASE_PATH) -> sqlite3.Connection:
+    database_path.parent.mkdir(parents=True, exist_ok=True)
+    database = sqlite3.connect(database_path)
+    database.execute(
+        """
+        CREATE TABLE IF NOT EXISTS episodes (
+            id TEXT PRIMARY KEY,
+            source_file TEXT NOT NULL,
+            transcript_file TEXT NOT NULL,
+            summary_file TEXT NOT NULL,
+            transcript TEXT NOT NULL,
+            summary TEXT NOT NULL,
+            embedding BLOB,
+            embedding_dimension INTEGER,
+            embedding_revision INTEGER,
+            embedding_language TEXT,
+            updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
         )
-
-    s3vectors.put_vectors(
-        vectorBucketName=bucket_name,
-        indexName=index_name,
-        vectors=[
-            {
-                "key": vector_key,
-                "data": {"float32": as_float32(embedding)},
-                "metadata": metadata,
-            }
-        ],
+        """
     )
+    database.execute(
+        "CREATE INDEX IF NOT EXISTS episodes_source_file_idx "
+        "ON episodes(source_file)"
+    )
+    database.execute("PRAGMA user_version = 1")
+    database.commit()
+    return database
+
+
+def upsert_episode(
+    database: sqlite3.Connection,
+    audio_path: Path,
+    transcript_path: Path,
+    summary_path: Path,
+    transcript: str,
+    summary: str,
+) -> str:
+    episode_id = vector_key_for(audio_path)
+    database.execute(
+        """
+        INSERT INTO episodes (
+            id, source_file, transcript_file, summary_file, transcript, summary
+        ) VALUES (?, ?, ?, ?, ?, ?)
+        ON CONFLICT(id) DO UPDATE SET
+            source_file = excluded.source_file,
+            transcript_file = excluded.transcript_file,
+            summary_file = excluded.summary_file,
+            transcript = excluded.transcript,
+            summary = excluded.summary,
+            embedding = CASE
+                WHEN episodes.summary = excluded.summary THEN episodes.embedding
+                ELSE NULL
+            END,
+            embedding_dimension = CASE
+                WHEN episodes.summary = excluded.summary
+                THEN episodes.embedding_dimension ELSE NULL
+            END,
+            embedding_revision = CASE
+                WHEN episodes.summary = excluded.summary
+                THEN episodes.embedding_revision ELSE NULL
+            END,
+            embedding_language = CASE
+                WHEN episodes.summary = excluded.summary
+                THEN episodes.embedding_language ELSE NULL
+            END,
+            updated_at = CURRENT_TIMESTAMP
+        """,
+        (
+            episode_id,
+            audio_path.name,
+            transcript_path.name,
+            summary_path.name,
+            transcript,
+            summary,
+        ),
+    )
+    return episode_id
 
 
 def vector_key_for(audio_path: Path) -> str:
@@ -158,81 +189,63 @@ def vector_key_for(audio_path: Path) -> str:
 def main():
     deepgram_api_key = get_api_key()
     openai_api_key = get_required_env("OPENAI_API_KEY")
-    vector_bucket_name = get_required_env("S3_VECTOR_BUCKET_NAME")
-    vector_index_name = get_required_env("S3_VECTOR_INDEX_NAME")
-    aws_region = os.getenv("AWS_REGION") or os.getenv("AWS_DEFAULT_REGION")
-    if not aws_region or not aws_region.strip():
-        raise ValueError("AWS_REGION or AWS_DEFAULT_REGION not found.")
-
     summary_model = (
         os.getenv("OPENAI_SUMMARY_MODEL", DEFAULT_SUMMARY_MODEL).strip()
         or DEFAULT_SUMMARY_MODEL
     )
     deepgram = DeepgramClient(api_key=deepgram_api_key)
     openai_client = OpenAI(api_key=openai_api_key)
-    s3vectors = boto3.client("s3vectors", region_name=aws_region.strip())
     AUDIO_DIR.mkdir(parents=True, exist_ok=True)
-
     audio_files = sorted([p for p in AUDIO_DIR.iterdir() if is_audio_file(p)])
-
     if not audio_files:
         exts = ", ".join(sorted(AUDIO_EXTENSIONS))
         raise FileNotFoundError(
             f"No audio files found in {AUDIO_DIR}. Supported extensions: {exts}"
         )
 
-    for audio_path in audio_files:
-        try:
-            transcript = transcribe_file(deepgram, audio_path)
-            output_path = OUTPUT_DIR / f"{audio_path.stem}.txt"
-            output_path.write_text(transcript, encoding="utf-8")
-            print(f"Saved {output_path.name}")
+    with initialize_database() as database:
+        for audio_path in audio_files:
+            try:
+                transcript = transcribe_file(deepgram, audio_path)
+                output_path = OUTPUT_DIR / f"{audio_path.stem}.txt"
+                output_path.write_text(transcript, encoding="utf-8")
+                print(f"Saved {output_path.name}")
 
-            summary = create_summary(openai_client, transcript, summary_model)
-            summary_path = SUMMARY_DIR / f"{audio_path.stem}.txt"
-            summary_path.write_text(summary, encoding="utf-8")
-            print(f"Saved summary {summary_path.name}")
+                summary = create_summary(openai_client, transcript, summary_model)
+                summary_path = SUMMARY_DIR / f"{audio_path.stem}.txt"
+                summary_path.write_text(summary, encoding="utf-8")
+                print(f"Saved summary {summary_path.name}")
 
-            embedding = create_embedding(openai_client, summary)
-            vector_key = vector_key_for(audio_path)
-            store_summary_vector(
-                s3vectors=s3vectors,
-                bucket_name=vector_bucket_name,
-                index_name=vector_index_name,
-                vector_key=vector_key,
-                embedding=embedding,
-                metadata={
-                    "source_file": audio_path.name,
-                    "transcript_file": output_path.name,
-                    "summary": summary,
-                    "summary_model": summary_model,
-                    "embedding_model": EMBEDDING_MODEL,
-                },
-            )
-            print(
-                f"Stored vector {vector_key} in "
-                f"{vector_bucket_name}/{vector_index_name}"
-            )
-        except ApiError as e:
-            print(f"API error for {audio_path.name}: {e}")
-            sys.exit(1)
-        except httpx.NetworkError as e:
-            # Handles dropped internet connection, DNS failure, etc.
-            print(f"Network Connection Issue: {e}")
-            sys.exit(1)
-        except httpx.TimeoutException as e:
-            # Handles cases where Deepgram took too long to reply
-            print(f"Request Timed Out: {e}")
-            sys.exit(1)
-        except (BotoCoreError, ClientError) as e:
-            print(f"AWS error for {audio_path.name}: {e}")
-            sys.exit(1)
-        except OpenAIError as e:
-            print(f"OpenAI error for {audio_path.name}: {e}")
-            sys.exit(1)
-        except Exception as e:
-            print(f"Failed on {audio_path.name}: {e}")
-            sys.exit(1)
+                episode_id = upsert_episode(
+                    database=database,
+                    audio_path=audio_path,
+                    transcript_path=output_path,
+                    summary_path=summary_path,
+                    transcript=transcript,
+                    summary=summary,
+                )
+                database.commit()
+                print(f"Stored local episode {episode_id} in {DATABASE_PATH}")
+            except ApiError as e:
+                print(f"API error for {audio_path.name}: {e}")
+                sys.exit(1)
+            except httpx.NetworkError as e:
+                # Handles dropped internet connection, DNS failure, etc.
+                print(f"Network Connection Issue: {e}")
+                sys.exit(1)
+            except httpx.TimeoutException as e:
+                # Handles cases where Deepgram took too long to reply
+                print(f"Request Timed Out: {e}")
+                sys.exit(1)
+            except OpenAIError as e:
+                print(f"OpenAI error for {audio_path.name}: {e}")
+                sys.exit(1)
+            except sqlite3.Error as e:
+                print(f"SQLite error for {audio_path.name}: {e}")
+                sys.exit(1)
+            except Exception as e:
+                print(f"Failed on {audio_path.name}: {e}")
+                sys.exit(1)
 
 
 if __name__ == "__main__":

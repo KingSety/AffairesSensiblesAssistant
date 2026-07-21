@@ -1,3 +1,4 @@
+import sqlite3
 from pathlib import Path
 from unittest.mock import Mock, patch
 from urllib.parse import urlparse
@@ -6,12 +7,11 @@ import pytest
 from deepgram.core.api_error import ApiError
 
 from deepgram_api import (
-    EMBEDDING_DIMENSIONS,
-    create_embedding,
     create_summary,
     get_api_key,
-    store_summary_vector,
+    initialize_database,
     transcribe_file,
+    upsert_episode,
     vector_key_for,
 )
 from download import download_file
@@ -94,46 +94,69 @@ def test_create_summary():
     openai_client.responses.create.assert_called_once()
 
 
-def test_create_embedding_uses_requested_model_and_dimensions():
-    openai_client = Mock()
-    openai_client.embeddings.create.return_value.data = [
-        Mock(embedding=[0.25] * EMBEDDING_DIMENSIONS)
-    ]
+def test_initialize_database_creates_episode_schema(tmp_path):
+    database_path = tmp_path / "ios" / "episodes.sqlite"
 
-    embedding = create_embedding(openai_client, "A short summary.")
+    with initialize_database(database_path) as database:
+        columns = {
+            row[1] for row in database.execute("PRAGMA table_info(episodes)")
+        }
 
-    assert len(embedding) == EMBEDDING_DIMENSIONS
-    openai_client.embeddings.create.assert_called_once_with(
-        model="text-embedding-3-small",
-        input="A short summary.",
-        dimensions=EMBEDDING_DIMENSIONS,
-        encoding_format="float",
-    )
-
-
-def test_store_summary_vector():
-    s3vectors = Mock()
-
-    store_summary_vector(
-        s3vectors=s3vectors,
-        bucket_name="videos",
-        index_name="summaries",
-        vector_key="audio-key",
-        embedding=[0.1] * EMBEDDING_DIMENSIONS,
-        metadata={"summary": "A short summary."},
-    )
-
-    request = s3vectors.put_vectors.call_args.kwargs
-    assert request["vectorBucketName"] == "videos"
-    assert request["indexName"] == "summaries"
-    assert request["vectors"][0]["key"] == "audio-key"
-    assert len(request["vectors"][0]["data"]["float32"]) == EMBEDDING_DIMENSIONS
-    assert request["vectors"][0]["metadata"]["summary"] == "A short summary."
+    assert database_path.is_file()
+    assert {
+        "id",
+        "source_file",
+        "transcript",
+        "summary",
+        "embedding",
+        "embedding_dimension",
+        "embedding_revision",
+        "embedding_language",
+    }.issubset(columns)
 
 
-def test_store_summary_vector_rejects_wrong_dimensions():
-    with pytest.raises(ValueError, match="received 1 dimension"):
-        store_summary_vector(Mock(), "bucket", "index", "key", [0.1], {})
+def test_upsert_episode_invalidates_embedding_when_summary_changes(tmp_path):
+    audio_path = Path("Audio/episode.m4a")
+    transcript_path = Path("Transcripts/episode.txt")
+    summary_path = Path("Summaries/episode.txt")
+
+    with initialize_database(tmp_path / "episodes.sqlite") as database:
+        episode_id = upsert_episode(
+            database,
+            audio_path,
+            transcript_path,
+            summary_path,
+            "Transcript",
+            "Original summary",
+        )
+        database.execute(
+            """
+            UPDATE episodes
+            SET embedding = ?, embedding_dimension = 2,
+                embedding_revision = 1, embedding_language = 'fr'
+            WHERE id = ?
+            """,
+            (sqlite3.Binary(b"12345678"), episode_id),
+        )
+
+        upsert_episode(
+            database,
+            audio_path,
+            transcript_path,
+            summary_path,
+            "Transcript",
+            "Changed summary",
+        )
+        row = database.execute(
+            """
+            SELECT embedding, embedding_dimension,
+                   embedding_revision, embedding_language
+            FROM episodes WHERE id = ?
+            """,
+            (episode_id,),
+        ).fetchone()
+
+    assert row == (None, None, None, None)
 
 
 def test_vector_key_is_deterministic():
