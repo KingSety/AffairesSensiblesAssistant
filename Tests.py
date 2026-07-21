@@ -1,5 +1,5 @@
 from pathlib import Path
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 from urllib.parse import urlparse
 
 import pytest
@@ -28,20 +28,37 @@ def test_url_validation():
     result = urlparse(invalid_url)
     assert not all([result.scheme, result.netloc]), "Invalid URL passed validation."
 
-def test_download_file():
+def test_download_file(tmp_path):
     url = "https://www.radiofrance.fr/franceinter/podcasts/affaires-sensibles/affaires-sensibles-du-lundi-05-janvier-2026-2623170"
-    audio_dir = download_file(url)
-    downloaded_file = audio_dir / "La Jégado, empoisonneuse en série.m4a"
-    assert downloaded_file.exists(), (
-        f"Expected downloaded file was not found: {downloaded_file}"
+    audio_dir = tmp_path / "audio"
+
+    with patch("download.yt_dlp.YoutubeDL") as youtube_dl:
+        downloader = youtube_dl.return_value.__enter__.return_value
+
+        result = download_file(url, output_dir=audio_dir)
+
+    youtube_dl.assert_called_once_with(
+        {
+            "paths": {"home": str(audio_dir)},
+            "outtmpl": "%(title)s.%(ext)s",
+        }
     )
+    downloader.download.assert_called_once_with([url])
+    assert result == audio_dir
+    assert audio_dir.is_dir()
 
 
-def test_transcribe_downloads_file():
-    # Test downloading and transcribing a file from a URL
+def test_download_file_accepts_string_output_path(tmp_path):
     url = "https://www.radiofrance.fr/franceinter/podcasts/affaires-sensibles/affaires-sensibles-du-lundi-05-janvier-2026-2623170"
-    response = download_file(url)
-    assert response is not None, "Download failed, response is None."
+    audio_dir = tmp_path / "audio"
+
+    with patch("download.yt_dlp.YoutubeDL") as youtube_dl:
+        result = download_file(url, output_dir=str(audio_dir))
+
+    youtube_dl.return_value.__enter__.return_value.download.assert_called_once_with(
+        [url]
+    )
+    assert result == audio_dir
 
 def test_missing_api_key(monkeypatch):
     monkeypatch.delenv("DEEPGRAM_API_KEY", raising=False)

@@ -2,10 +2,10 @@ from pathlib import Path
 from urllib.parse import urlparse
 import yt_dlp
 
-def download_file(url: str):
+def download_file(url: str, output_dir=None):
 
-    ROOT_DIR = Path(__file__).resolve().parent
-    AUDIO_DIR = ROOT_DIR / "Audio"
+    root_dir = Path(__file__).resolve().parent
+    audio_dir = Path(output_dir) if output_dir is not None else root_dir / "Audio"
     try:
     
         result = urlparse(url)
@@ -15,11 +15,11 @@ def download_file(url: str):
         print("Operation cancelled by user.")
         exit(1)
 
-    AUDIO_DIR.mkdir(parents=True, exist_ok=True)
+    audio_dir.mkdir(parents=True, exist_ok=True)
 
     options = {
         "paths": {
-            "home": str(AUDIO_DIR),
+            "home": str(audio_dir),
         },
         "outtmpl": "%(title)s.%(ext)s",
     }
@@ -31,7 +31,7 @@ def download_file(url: str):
             print(f"Download failed: {e}")
             exit(1)
 
-    return AUDIO_DIR
+    return audio_dir
 
 def main():
     url = input("Paste the video URL: ").strip()
