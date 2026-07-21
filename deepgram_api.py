@@ -219,10 +219,11 @@ def main():
         except httpx.NetworkError as e:
             # Handles dropped internet connection, DNS failure, etc.
             print(f"Network Connection Issue: {e}")
-
+            sys.exit(1)
         except httpx.TimeoutException as e:
             # Handles cases where Deepgram took too long to reply
             print(f"Request Timed Out: {e}")
+            sys.exit(1)
         except (BotoCoreError, ClientError) as e:
             print(f"AWS error for {audio_path.name}: {e}")
             sys.exit(1)
