@@ -39,7 +39,12 @@ struct LibraryView: View {
                     ScrollView {
                         LazyVStack(spacing: 12) {
                             ForEach(filteredEpisodes) { episode in
-                                EpisodeRow(episode: episode)
+                                NavigationLink {
+                                    EpisodeDetailView(episode: episode)
+                                } label: {
+                                    EpisodeRow(episode: episode)
+                                }
+                                .buttonStyle(.plain)
                             }
                         }
                         .padding()
@@ -123,56 +128,6 @@ private struct EpisodeRow: View {
             RoundedRectangle(cornerRadius: 14)
                 .stroke(.quaternary, lineWidth: 1)
         }
-    }
-}
-
-private struct PodcastEpisode: Codable, Identifiable {
-    let id: String
-    let title: String
-    let description: String
-    let sourceURL: String
-    let artworkURL: String
-    let language: String
-    let publishedDate: String?
-    let durationSeconds: Int?
-
-    enum CodingKeys: String, CodingKey {
-        case id
-        case title
-        case description
-        case sourceURL = "source_url"
-        case artworkURL = "artwork_url"
-        case language
-        case publishedDate = "published_date"
-        case durationSeconds = "duration_seconds"
-    }
-
-    var durationText: String {
-        guard let durationSeconds else {
-            return ""
-        }
-        return "\(durationSeconds / 60) min"
-    }
-}
-
-private enum EpisodeCatalog {
-    private enum CatalogError: LocalizedError {
-        case missing
-
-        var errorDescription: String? {
-            "The imported episode catalog is not in the app bundle."
-        }
-    }
-
-    static func load() throws -> [PodcastEpisode] {
-        guard let url = Bundle.main.url(
-            forResource: "imported_episodes",
-            withExtension: "json"
-        ) else {
-            throw CatalogError.missing
-        }
-
-        return try JSONDecoder().decode([PodcastEpisode].self, from: Data(contentsOf: url))
     }
 }
 

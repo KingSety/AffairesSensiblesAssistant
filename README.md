@@ -63,6 +63,21 @@ Temporary DNS, timeout, rate-limit, and server errors are retried three times;
 use `--retries 5` to retry more often or `--request-timeout 60` for a slower
 connection.
 
+## iOS AI backend
+
+The iOS app sends retrieved episode context to a backend; it never stores an
+OpenAI API key in the app. For local simulator development, configure
+`OPENAI_API_KEY` in `.env` and run:
+
+```bash
+python3 ai_server.py
+```
+
+The app defaults to `http://127.0.0.1:8080`. For a physical device, run the
+backend behind an authenticated HTTPS endpoint and set `AIBackendURL` in the
+app configuration. Do not expose the development server directly to the
+internet.
+
 ## Apple embeddings and local search
 
 The Swift package in `ios/LocalVectorSearch` contains:

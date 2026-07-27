@@ -8,8 +8,192 @@
 import SwiftUI
 
 struct SettingsView: View {
+    private let responseLengths = ["Short", "Medium", "Long"]
+    private let timestampChoices = ["Yes", "No"]
+
+    @AppStorage("responseLength") private var selectedLength = "Medium"
+    @AppStorage("timestamps") private var selectedTimestamps = "Yes"
+    @AppStorage("isDarkMode") private var isDarkMode = false
+    @AppStorage("username") private var username = "Guest"
+    @AppStorage("notificationsEnabled") private var notificationsEnabled = true
+    @State private var storageUsage = LibraryStorageUsage(
+        downloads: 0,
+        transcriptAndEmbeddingCache: 0
+    )
+    @State private var pendingStorageAction: StorageAction?
+    @State private var storageError: String?
+
     var body: some View {
-        Text(/*@START_MENU_TOKEN@*/"Hello, World!"/*@END_MENU_TOKEN@*/)
+        NavigationStack {
+            Form {
+                profileSection
+                preferenceSection
+                aiPreferenceSection
+                storageSection
+            }
+            .navigationTitle("Settings")
+            .task {
+                refreshStorageUsage()
+            }
+            .confirmationDialog(
+                pendingStorageAction?.title ?? "",
+                isPresented: Binding(
+                    get: { pendingStorageAction != nil },
+                    set: { if !$0 { pendingStorageAction = nil } }
+                ),
+                titleVisibility: .visible
+            ) {
+                if let action = pendingStorageAction {
+                    Button(action.title, role: .destructive) {
+                        clear(action)
+                        pendingStorageAction = nil
+                    }
+                }
+            } message: {
+                Text(pendingStorageAction?.message ?? "")
+            }
+            .alert(
+                "Storage action failed",
+                isPresented: Binding(
+                    get: { storageError != nil },
+                    set: { if !$0 { storageError = nil } }
+                )
+            ) {
+                Button("OK", role: .cancel) {}
+            } message: {
+                Text(storageError ?? "")
+            }
+        }
+    }
+
+    private var profileSection: some View {
+        Section("Profile") {
+            TextField("Username", text: $username)
+        }
+    }
+
+    private var preferenceSection: some View {
+        Section("Preferences") {
+            Toggle("Dark Mode", isOn: $isDarkMode)
+            Toggle("Enable Notifications", isOn: $notificationsEnabled)
+        }
+    }
+
+    private var aiPreferenceSection: some View {
+        Section("AI Preferences") {
+            Picker("Response Length", selection: $selectedLength) {
+                ForEach(responseLengths, id: \.self) { responseLength in
+                    Text(responseLength)
+                }
+            }
+
+            Picker("Show Timestamps/Sources", selection: $selectedTimestamps) {
+                ForEach(timestampChoices, id: \.self) { timestampChoice in
+                    Text(timestampChoice)
+                }
+            }
+        }
+    }
+
+    private var storageSection: some View {
+        Section("Storage") {
+            StorageRow(
+                title: "Downloads",
+                detail: storageUsage.downloadsText,
+                actionTitle: "Clear Downloads"
+            ) {
+                pendingStorageAction = .downloads
+            }
+
+            StorageRow(
+                title: "Transcript & Embedding Cache",
+                detail: storageUsage.cacheText,
+                actionTitle: "Clear Cache"
+            ) {
+                pendingStorageAction = .cache
+            }
+
+            Button("Clear Library Data", role: .destructive) {
+                pendingStorageAction = .library
+            }
+        }
+    }
+
+    private func clear(_ action: StorageAction) {
+        do {
+            switch action {
+            case .downloads:
+                try LibraryStorage.clearDownloads()
+            case .cache:
+                try LibraryStorage.clearTranscriptAndEmbeddingCache()
+            case .library:
+                try LibraryStorage.clearLibraryData()
+            }
+            refreshStorageUsage()
+        } catch {
+            storageError = error.localizedDescription
+        }
+    }
+
+    private func refreshStorageUsage() {
+        do {
+            storageUsage = try LibraryStorage.usage()
+        } catch {
+            storageError = error.localizedDescription
+        }
+    }
+}
+
+private struct StorageRow: View {
+    let title: String
+    let detail: String
+    let actionTitle: String
+    let action: () -> Void
+
+    var body: some View {
+        HStack {
+            VStack(alignment: .leading) {
+                Text(title)
+                Text(detail)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            Spacer()
+
+            Button(actionTitle, action: action)
+                .buttonStyle(.borderless)
+        }
+    }
+}
+
+private enum StorageAction: String, Identifiable {
+    case downloads
+    case cache
+    case library
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .downloads:
+            return "Clear Downloads"
+        case .cache:
+            return "Clear Transcript & Embedding Cache"
+        case .library:
+            return "Clear Library Data"
+        }
+    }
+
+    var message: String {
+        switch self {
+        case .downloads:
+            return "Downloaded episode files will be removed from this device."
+        case .cache:
+            return "Stored transcripts and generated embeddings will be removed. They can be recreated later."
+        case .library:
+            return "Downloads, local transcripts, embeddings, and local library state will be removed from this device."
+        }
     }
 }
 

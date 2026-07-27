@@ -76,7 +76,16 @@ struct HomeView: View {
         isResponding = true
 
         Task {
-            let response = LibraryAssistant.response(to: query)
+            let response: String
+            do {
+                response = try await EpisodeAIService().respond(
+                    action: .chat,
+                    query: query,
+                    messages: messages
+                )
+            } catch {
+                response = "I couldn't complete that request. \(error.localizedDescription)"
+            }
             await MainActor.run {
                 messages.append(ChatMessage(role: .assistant, text: response))
                 isResponding = false
@@ -174,105 +183,6 @@ private struct ChatSuggestions: View {
                 }
             }
         }
-    }
-}
-
-private struct ChatMessage: Identifiable {
-    enum Role {
-        case user
-        case assistant
-    }
-
-    let id = UUID()
-    let role: Role
-    let text: String
-}
-
-private struct CatalogEpisode: Decodable {
-    let title: String
-    let description: String
-    let language: String
-}
-
-private enum LibraryAssistant {
-    static func response(to query: String) -> String {
-        do {
-            let episodes = try loadEpisodes()
-            let matches = bestMatches(for: query, in: episodes)
-
-            guard !matches.isEmpty else {
-                return "I couldn't find a matching episode in your imported library. Try a person, topic, or title."
-            }
-
-            let results = matches.prefix(3).map { episode in
-                "• \(episode.title) — \(episode.description)"
-            }
-            return "Here are the best matches from your library:\n\n\(results.joined(separator: "\n\n"))"
-        } catch {
-            return "I couldn't access the imported episode catalog. Make sure imported_episodes.json is included in the app target."
-        }
-    }
-
-    private static func loadEpisodes() throws -> [CatalogEpisode] {
-        guard let catalogURL = Bundle.main.url(
-            forResource: "imported_episodes",
-            withExtension: "json"
-        ) else {
-            throw CatalogError.missing
-        }
-
-        return try JSONDecoder().decode([CatalogEpisode].self, from: Data(contentsOf: catalogURL))
-    }
-
-    private static func bestMatches(
-        for query: String,
-        in episodes: [CatalogEpisode]
-    ) -> [CatalogEpisode] {
-        let normalizedQuery = query.lowercased()
-        if normalizedQuery.contains("latest") || normalizedQuery.contains("recent")
-            || normalizedQuery.contains("summar") || normalizedQuery.contains("résum") {
-            return Array(episodes.prefix(3))
-        }
-
-        if normalizedQuery.contains("french") || normalizedQuery.contains("français")
-            || normalizedQuery.contains("francais") {
-            return episodes.filter { $0.language.lowercased() == "fr" }.prefix(3).map { $0 }
-        }
-
-        let keywords = normalizedQuery
-            .components(separatedBy: CharacterSet.alphanumerics.inverted)
-            .filter { $0.count >= 3 }
-
-        guard !keywords.isEmpty else {
-            return Array(episodes.prefix(3))
-        }
-
-        return episodes
-            .map { episode in
-                let title = episode.title.lowercased()
-                let description = episode.description.lowercased()
-                let score = keywords.reduce(into: 0) { total, keyword in
-                    if title.contains(keyword) {
-                        total += 3
-                    }
-                    if description.contains(keyword) {
-                        total += 1
-                    }
-                    if episode.language.lowercased().contains(keyword) {
-                        total += 1
-                    }
-                }
-                return (episode, score)
-            }
-            .filter { $0.1 > 0 }
-            .sorted { left, right in
-                left.1 > right.1
-            }
-            .map(\.0)
-    }
-
-    private enum CatalogError: Error {
-        case missing
     }
 }
 

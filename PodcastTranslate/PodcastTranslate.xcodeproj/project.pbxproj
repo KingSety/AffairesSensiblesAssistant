@@ -9,6 +9,7 @@
 /* Begin PBXBuildFile section */
 		5DB088833014A0490055FEB9 /* LocalVectorSearch in Frameworks */ = {isa = PBXBuildFile; productRef = 5DB088823014A0490055FEB9 /* LocalVectorSearch */; };
 		5DB088A53016E0610055FEB9 /* imported_episodes.json in Resources */ = {isa = PBXBuildFile; fileRef = 5DB088A43016E0610055FEB9 /* imported_episodes.json */; };
+		5DB088A73016E0610055FEB9 /* episodes.sqlite in Resources */ = {isa = PBXBuildFile; fileRef = 5DB088A63016E0610055FEB9 /* episodes.sqlite */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -33,6 +34,7 @@
 		5DB088643013C3D40055FEB9 /* PodcastTranslateTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = PodcastTranslateTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		5DB0886E3013C3D40055FEB9 /* PodcastTranslateUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = PodcastTranslateUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		5DB088A43016E0610055FEB9 /* imported_episodes.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = imported_episodes.json; sourceTree = "<group>"; };
+		5DB088A63016E0610055FEB9 /* episodes.sqlite */ = {isa = PBXFileReference; lastKnownFileType = file; name = episodes.sqlite; path = ../ios/Resources/episodes.sqlite; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
@@ -83,6 +85,7 @@
 			isa = PBXGroup;
 			children = (
 				5DB088A43016E0610055FEB9 /* imported_episodes.json */,
+				5DB088A63016E0610055FEB9 /* episodes.sqlite */,
 				5DB088593013C3D30055FEB9 /* PodcastTranslate */,
 				5DB088673013C3D40055FEB9 /* PodcastTranslateTests */,
 				5DB088713013C3D40055FEB9 /* PodcastTranslateUITests */,
@@ -225,6 +228,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				5DB088A53016E0610055FEB9 /* imported_episodes.json in Resources */,
+				5DB088A73016E0610055FEB9 /* episodes.sqlite in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -410,6 +414,7 @@
 				CURRENT_PROJECT_VERSION = 1;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_NSAppTransportSecurity_NSAllowsLocalNetworking = YES;
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
