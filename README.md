@@ -36,6 +36,33 @@ python3 build_local_database.py
 Updating a summary clears its old embedding so the iOS layer will regenerate a
 compatible vector.
 
+## Import a Radio France podcast catalog
+
+Export the episodes from a Radio France podcast listing into a JSON catalog for
+the iOS app:
+
+```bash
+python3 podcast_scraper.py 'https://www.radiofrance.fr/franceinter/podcasts/affaires-sensibles?p=3'
+```
+
+This writes `ios/Resources/imported_episodes.json`. Each item includes its
+title, French source language, artwork URL, episode URL, publication date, and
+duration. The Xcode project bundles this catalog in the `PodcastTranslate` app
+target. Listening progress is intentionally not scraped: it belongs to each
+user's device and is recorded by the app during playback.
+
+To collect the full catalog rather than one page, use:
+
+```bash
+python3 podcast_scraper.py 'https://www.radiofrance.fr/franceinter/podcasts/affaires-sensibles' --all-pages
+```
+
+The scraper follows Radio France's published pagination, pauses briefly between
+requests, and removes duplicate episode URLs before writing the catalog.
+Temporary DNS, timeout, rate-limit, and server errors are retried three times;
+use `--retries 5` to retry more often or `--request-timeout 60` for a slower
+connection.
+
 ## Apple embeddings and local search
 
 The Swift package in `ios/LocalVectorSearch` contains:
