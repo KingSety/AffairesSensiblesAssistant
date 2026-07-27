@@ -6,6 +6,11 @@
 	objectVersion = 77;
 	objects = {
 
+/* Begin PBXBuildFile section */
+		5DB088833014A0490055FEB9 /* LocalVectorSearch in Frameworks */ = {isa = PBXBuildFile; productRef = 5DB088823014A0490055FEB9 /* LocalVectorSearch */; };
+		5DB088A53016E0610055FEB9 /* imported_episodes.json in Resources */ = {isa = PBXBuildFile; fileRef = 5DB088A43016E0610055FEB9 /* imported_episodes.json */; };
+/* End PBXBuildFile section */
+
 /* Begin PBXContainerItemProxy section */
 		5DB088653013C3D40055FEB9 /* PBXContainerItemProxy */ = {
 			isa = PBXContainerItemProxy;
@@ -27,6 +32,7 @@
 		5DB088573013C3D30055FEB9 /* PodcastTranslate.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = PodcastTranslate.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		5DB088643013C3D40055FEB9 /* PodcastTranslateTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = PodcastTranslateTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		5DB0886E3013C3D40055FEB9 /* PodcastTranslateUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = PodcastTranslateUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		5DB088A43016E0610055FEB9 /* imported_episodes.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = imported_episodes.json; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
@@ -52,6 +58,7 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				5DB088833014A0490055FEB9 /* LocalVectorSearch in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -75,6 +82,7 @@
 		5DB0884E3013C3D30055FEB9 = {
 			isa = PBXGroup;
 			children = (
+				5DB088A43016E0610055FEB9 /* imported_episodes.json */,
 				5DB088593013C3D30055FEB9 /* PodcastTranslate */,
 				5DB088673013C3D40055FEB9 /* PodcastTranslateTests */,
 				5DB088713013C3D40055FEB9 /* PodcastTranslateUITests */,
@@ -112,6 +120,7 @@
 			);
 			name = PodcastTranslate;
 			packageProductDependencies = (
+				5DB088823014A0490055FEB9 /* LocalVectorSearch */,
 			);
 			productName = PodcastTranslate;
 			productReference = 5DB088573013C3D30055FEB9 /* PodcastTranslate.app */;
@@ -195,6 +204,9 @@
 			);
 			mainGroup = 5DB0884E3013C3D30055FEB9;
 			minimizedProjectReferenceProxies = 1;
+			packageReferences = (
+				5DB088813014A0490055FEB9 /* XCLocalSwiftPackageReference "../ios/LocalVectorSearch" */,
+			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = 5DB088583013C3D30055FEB9 /* Products */;
 			projectDirPath = "";
@@ -212,6 +224,7 @@
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				5DB088A53016E0610055FEB9 /* imported_episodes.json in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -570,6 +583,20 @@
 			defaultConfigurationName = Release;
 		};
 /* End XCConfigurationList section */
+
+/* Begin XCLocalSwiftPackageReference section */
+		5DB088813014A0490055FEB9 /* XCLocalSwiftPackageReference "../ios/LocalVectorSearch" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = ../ios/LocalVectorSearch;
+		};
+/* End XCLocalSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		5DB088823014A0490055FEB9 /* LocalVectorSearch */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = LocalVectorSearch;
+		};
+/* End XCSwiftPackageProductDependency section */
 	};
 	rootObject = 5DB0884F3013C3D30055FEB9 /* Project object */;
 }
