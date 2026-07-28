@@ -2,10 +2,12 @@
 
 ## Add the package and database
 
-1. In Xcode, add the local package at `ios/LocalVectorSearch` to the app target.
-2. Drag `ios/Resources/episodes.sqlite` into the app target.
-3. In the File inspector, confirm the application target is checked.
-4. In Build Phases > Copy Bundle Resources, confirm `episodes.sqlite` appears.
+
+1. Open deepgram_video_parser-master/PodcastTranslate/PodcastTranslate.xcodeproj on Xcode
+2. In Xcode, add the local package at `ios/LocalVectorSearch` to the app target if not included.
+3. Ensure `ios/Resources/episodes.sqlite` is a reference to the App target.
+4. In the File inspector, confirm the application target is checked.
+5. In Build Phases > Copy Bundle Resources, confirm `episodes.sqlite` appears.
 
 The bundled database is read-only. Install it into Application Support before
 opening it for vector updates:
@@ -42,26 +44,6 @@ Task {
 }
 ```
 
-`prepareEmbeddings()` is idempotent during the app process. It regenerates a
-row when its vector is absent or its dimension, language, or Apple embedding
-revision differs from the model available on the device.
-
-## Optional: precompute vectors on a Mac
-
-To avoid first-launch indexing, try:
-
-```bash
-cd ios/LocalVectorSearch
-swift run build-episode-embeddings ../Resources/episodes.sqlite
-```
-
-`NLEmbedding.sentenceEmbedding` returns `nil` when the requested OS-managed
-model is not available. A Mac can therefore support a revision in the SDK while
-not having its model asset installed. In that case, leave the vectors empty and
-let a supported iPhone generate them on first launch.
-
-Do not fall back to existing OpenAI vectors: Apple and OpenAI embeddings use
-different vector spaces and cannot be compared.
 
 ## Updating the catalog
 
