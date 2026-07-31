@@ -146,6 +146,9 @@ def copy_database(source_path: Path, destination_path: Path) -> None:
     destination = sqlite3.connect(temporary_path)
     try:
         source.backup(destination)
+        destination.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+        destination.execute("PRAGMA journal_mode=DELETE")
+        destination.commit()
     finally:
         destination.close()
         source.close()

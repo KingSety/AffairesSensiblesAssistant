@@ -20,14 +20,17 @@ public final class EpisodeDatabase {
         self.accessMode = accessMode
         var database: OpaquePointer?
         let flags: Int32
+        let location: String
         switch accessMode {
         case .readOnly:
-            flags = SQLITE_OPEN_READONLY | SQLITE_OPEN_FULLMUTEX
+            flags = SQLITE_OPEN_READONLY | SQLITE_OPEN_FULLMUTEX | SQLITE_OPEN_URI
+            location = "\(url.absoluteString)?mode=ro&immutable=1"
         case .readWrite:
             flags = SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_FULLMUTEX
+            location = url.path
         }
         let result = sqlite3_open_v2(
-            url.path,
+            location,
             &database,
             flags,
             nil
@@ -624,6 +627,13 @@ public final class EpisodeDatabase {
 
     public func rollbackTransaction() throws {
         try execute("ROLLBACK")
+    }
+
+    /// Makes a completed database safe to ship as a read-only app resource.
+    public func finalizeForBundling() throws {
+        guard case .readWrite = accessMode else { return }
+        try execute("PRAGMA wal_checkpoint(TRUNCATE)")
+        try execute("PRAGMA journal_mode=DELETE")
     }
 
     private func createSchema() throws {

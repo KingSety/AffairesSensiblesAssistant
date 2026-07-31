@@ -1,10 +1,11 @@
 import Foundation
+import NaturalLanguage
 
 public actor LocalEpisodeSearch {
     private static let maximumChunkCharacters = 900
 
     private let database: EpisodeDatabase
-    private let embedder: AppleSentenceEmbedder
+    private let embedder: AppleSentenceEmbedder?
     private let databaseAccessMode: EpisodeDatabaseAccessMode
     private let maximumChunksPerEpisode: Int?
     private var isPrepared = false
@@ -16,7 +17,7 @@ public actor LocalEpisodeSearch {
         maximumChunksPerEpisode: Int? = nil
     ) throws {
         self.database = try EpisodeDatabase(url: databaseURL, accessMode: databaseAccessMode)
-        self.embedder = try AppleSentenceEmbedder()
+        self.embedder = try? AppleSentenceEmbedder()
         self.databaseAccessMode = databaseAccessMode
         self.maximumChunksPerEpisode = maximumChunksPerEpisode
     }
@@ -25,7 +26,8 @@ public actor LocalEpisodeSearch {
         guard !isPrepared else { return }
 
         if let storedIndex = try database.fetchApproximateIndexMetadata(),
-           try isCompatible(storedIndex) {
+           let embedder,
+           try isCompatible(storedIndex, using: embedder) {
             if databaseAccessMode == .readWrite,
                try database.transcriptTextIndexCount() != storedIndex.nodeCount {
                 try database.beginTransaction()
@@ -43,7 +45,15 @@ public actor LocalEpisodeSearch {
         }
 
         guard databaseAccessMode == .readWrite else {
-            throw LocalVectorSearchError.prebuiltIndexRequired
+            guard try database.transcriptTextIndexCount() > 0 else {
+                throw LocalVectorSearchError.prebuiltIndexRequired
+            }
+            isPrepared = true
+            return
+        }
+
+        guard let embedder else {
+            throw LocalVectorSearchError.embeddingUnavailable(NLLanguage.french.rawValue)
         }
 
         let episodes = try database.fetchEmbeddingRecords()
@@ -124,10 +134,6 @@ public actor LocalEpisodeSearch {
         guard limit > 0 else { return [] }
         try prepareEmbeddings()
 
-        let queryVector = try embedder.vector(for: query)
-        guard let approximateIndex else {
-            throw LocalVectorSearchError.invalidEmbedding
-        }
         let keywordMatches = try database.searchTranscriptText(query, limit: limit)
         if !keywordMatches.isEmpty {
             return try keywordMatches.enumerated().compactMap { offset, match in
@@ -142,6 +148,11 @@ public actor LocalEpisodeSearch {
                 )
             }
         }
+
+        guard let embedder, let approximateIndex else {
+            return []
+        }
+        let queryVector = try embedder.vector(for: query)
         var bestMatches: [String: (score: Float, excerpt: String)] = [:]
         let candidateCount = max(limit * 32, 128)
         let candidates = try approximateIndex.search(
@@ -190,7 +201,10 @@ public actor LocalEpisodeSearch {
         return results
     }
 
-    private func isCompatible(_ metadata: ApproximateIndexMetadata) throws -> Bool {
+    private func isCompatible(
+        _ metadata: ApproximateIndexMetadata,
+        using embedder: AppleSentenceEmbedder
+    ) throws -> Bool {
         guard metadata.embeddingRevision == embedder.transcriptEmbeddingRevision,
               metadata.embeddingLanguage == embedder.language.rawValue,
               metadata.embeddingDimension == embedder.dimension

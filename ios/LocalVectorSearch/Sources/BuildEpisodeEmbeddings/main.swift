@@ -29,11 +29,14 @@ struct BuildEpisodeEmbeddings {
         let useQuickIndex = arguments.contains("--quick")
         let databaseURL = URL(fileURLWithPath: databasePath)
         let database = try EpisodeDatabase(url: databaseURL)
-        let search = try LocalEpisodeSearch(
-            databaseURL: databaseURL,
-            maximumChunksPerEpisode: useQuickIndex ? 1 : nil
-        )
-        try await search.prepareEmbeddings()
+        do {
+            let search = try LocalEpisodeSearch(
+                databaseURL: databaseURL,
+                maximumChunksPerEpisode: useQuickIndex ? 1 : nil
+            )
+            try await search.prepareEmbeddings()
+        }
+        try database.finalizeForBundling()
         let chunkCount = try database.transcriptChunkCount()
         let mode = useQuickIndex ? "quick testing" : "full"
         print("Built a \(mode) HNSW-style index for \(chunkCount) transcript chunks.")
