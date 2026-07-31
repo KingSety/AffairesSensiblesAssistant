@@ -3,4 +3,3 @@ deepgram-sdk
 yt-dlp
 pytest
 httpx
-openai

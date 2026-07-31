@@ -4,7 +4,6 @@ from deepgram_api import (
     AUDIO_DIR,
     DATABASE_PATH,
     OUTPUT_DIR,
-    SUMMARY_DIR,
     initialize_database,
     is_audio_file,
     upsert_episode,
@@ -20,24 +19,30 @@ def find_audio_path(stem: str) -> Path:
     return matches[0]
 
 
+def remove_existing_database(database_path: Path) -> None:
+    for path in (
+        database_path,
+        database_path.with_name(f"{database_path.name}-shm"),
+        database_path.with_name(f"{database_path.name}-wal"),
+    ):
+        path.unlink(missing_ok=True)
+
+
 def build_database(database_path: Path = DATABASE_PATH) -> int:
-    summary_paths = sorted(SUMMARY_DIR.glob("*.txt"))
-    if not summary_paths:
-        raise FileNotFoundError(f"No summaries found in {SUMMARY_DIR}.")
+    transcript_paths = sorted(OUTPUT_DIR.glob("*.txt"))
+    if not transcript_paths:
+        raise FileNotFoundError(f"No transcripts found in {OUTPUT_DIR}.")
+
+    remove_existing_database(database_path)
     count = 0
     with initialize_database(database_path) as database:
-        for summary_path in summary_paths:
-            transcript_path = OUTPUT_DIR / summary_path.name
-            if not transcript_path.is_file():
-                raise FileNotFoundError(f"Missing transcript {transcript_path}.")
-            audio_path = find_audio_path(summary_path.stem)
+        for transcript_path in transcript_paths:
+            audio_path = find_audio_path(transcript_path.stem)
             upsert_episode(
                 database=database,
                 audio_path=audio_path,
                 transcript_path=transcript_path,
-                summary_path=summary_path,
                 transcript=transcript_path.read_text(encoding="utf-8"),
-                summary=summary_path.read_text(encoding="utf-8"),
             )
             count += 1
         database.commit()
