@@ -9,17 +9,13 @@ import SwiftUI
 
 struct SettingsView: View {
     private let responseLengths = ["Short", "Medium", "Long"]
-    private let timestampChoices = ["Yes", "No"]
 
-    @AppStorage("responseLength") private var selectedLength = "Medium"
-    @AppStorage("timestamps") private var selectedTimestamps = "Yes"
+    @AppStorage("responseLength") private var responseLength = "Medium"
+    @AppStorage("includeSourcesAndTimestamps") private var includeSourcesAndTimestamps = true
     @AppStorage("isDarkMode") private var isDarkMode = false
     @AppStorage("username") private var username = "Guest"
     @AppStorage("notificationsEnabled") private var notificationsEnabled = true
-    @State private var storageUsage = LibraryStorageUsage(
-        downloads: 0,
-        transcriptAndEmbeddingCache: 0
-    )
+    @State private var storageUsage = LibraryStorageUsage(transcriptAndEmbeddingCache: 0)
     @State private var pendingStorageAction: StorageAction?
     @State private var storageError: String?
 
@@ -81,30 +77,18 @@ struct SettingsView: View {
 
     private var aiPreferenceSection: some View {
         Section("AI Preferences") {
-            Picker("Response Length", selection: $selectedLength) {
-                ForEach(responseLengths, id: \.self) { responseLength in
-                    Text(responseLength)
+            Picker("Response Length", selection: $responseLength) {
+                ForEach(responseLengths, id: \.self) { length in
+                    Text(length).tag(length)
                 }
             }
+            Toggle("Include Sources/Timestamps", isOn: $includeSourcesAndTimestamps)
 
-            Picker("Show Timestamps/Sources", selection: $selectedTimestamps) {
-                ForEach(timestampChoices, id: \.self) { timestampChoice in
-                    Text(timestampChoice)
-                }
-            }
         }
     }
 
     private var storageSection: some View {
         Section("Storage") {
-            StorageRow(
-                title: "Downloads",
-                detail: storageUsage.downloadsText,
-                actionTitle: "Clear Downloads"
-            ) {
-                pendingStorageAction = .downloads
-            }
-
             StorageRow(
                 title: "Transcript & Embedding Cache",
                 detail: storageUsage.cacheText,
@@ -122,8 +106,6 @@ struct SettingsView: View {
     private func clear(_ action: StorageAction) {
         do {
             switch action {
-            case .downloads:
-                try LibraryStorage.clearDownloads()
             case .cache:
                 try LibraryStorage.clearTranscriptAndEmbeddingCache()
             case .library:
@@ -168,7 +150,6 @@ private struct StorageRow: View {
 }
 
 private enum StorageAction: String, Identifiable {
-    case downloads
     case cache
     case library
 
@@ -176,8 +157,6 @@ private enum StorageAction: String, Identifiable {
 
     var title: String {
         switch self {
-        case .downloads:
-            return "Clear Downloads"
         case .cache:
             return "Clear Transcript & Embedding Cache"
         case .library:
@@ -187,12 +166,10 @@ private enum StorageAction: String, Identifiable {
 
     var message: String {
         switch self {
-        case .downloads:
-            return "Downloaded episode files will be removed from this device."
         case .cache:
             return "Stored transcripts and generated embeddings will be removed. They can be recreated later."
         case .library:
-            return "Downloads, local transcripts, embeddings, and local library state will be removed from this device."
+            return "Local transcripts, embeddings, and library state will be removed from this device."
         }
     }
 }

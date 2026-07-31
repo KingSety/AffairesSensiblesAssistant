@@ -4,9 +4,9 @@ import Darwin
 
 @main
 struct BuildEpisodeEmbeddings {
-    static func main() {
+    static func main() async {
         do {
-            try run()
+            try await run()
         } catch {
             FileHandle.standardError.write(
                 Data("Embedding build failed: \(error.localizedDescription)\n".utf8)
@@ -15,33 +15,27 @@ struct BuildEpisodeEmbeddings {
         }
     }
 
-    private static func run() throws {
-        guard CommandLine.arguments.count == 2 else {
+    private static func run() async throws {
+        let arguments = Array(CommandLine.arguments.dropFirst())
+        guard let databasePath = arguments.first,
+              arguments.count == 1 || arguments == [databasePath, "--quick"]
+        else {
             FileHandle.standardError.write(
-                Data("Usage: build-episode-embeddings /path/to/episodes.sqlite\n".utf8)
+                Data("Usage: build-episode-embeddings /path/to/episodes.sqlite [--quick]\n".utf8)
             )
             exit(2)
         }
 
-        let databaseURL = URL(fileURLWithPath: CommandLine.arguments[1])
+        let useQuickIndex = arguments.contains("--quick")
+        let databaseURL = URL(fileURLWithPath: databasePath)
         let database = try EpisodeDatabase(url: databaseURL)
-        let embedder = try AppleSentenceEmbedder()
-        let episodes = try database.fetchAllEpisodes()
-
-        for (offset, episode) in episodes.enumerated() {
-            let vector = try embedder.vector(for: episode.summary)
-            try database.updateEmbedding(
-                episodeID: episode.id,
-                vector: vector,
-                revision: embedder.revision,
-                language: embedder.language
-            )
-            print("Embedded \(offset + 1)/\(episodes.count): \(episode.sourceFile)")
-        }
-
-        print(
-            "Stored French revision \(embedder.revision) embeddings "
-                + "with \(embedder.dimension) dimensions."
+        let search = try LocalEpisodeSearch(
+            databaseURL: databaseURL,
+            maximumChunksPerEpisode: useQuickIndex ? 1 : nil
         )
+        try await search.prepareEmbeddings()
+        let chunkCount = try database.transcriptChunkCount()
+        let mode = useQuickIndex ? "quick testing" : "full"
+        print("Built a \(mode) HNSW-style index for \(chunkCount) transcript chunks.")
     }
 }

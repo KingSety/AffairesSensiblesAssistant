@@ -3,9 +3,15 @@ import Foundation
 import NaturalLanguage
 
 public struct AppleSentenceEmbedder {
+    private static let transcriptRevisionOffset = 2_000_000
+
     public let language: NLLanguage = .french
     public let revision: Int
     public let dimension: Int
+
+    public var transcriptEmbeddingRevision: Int {
+        revision + Self.transcriptRevisionOffset
+    }
 
     private let embedding: NLEmbedding
 
