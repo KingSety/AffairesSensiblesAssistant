@@ -4,91 +4,52 @@ struct EpisodeDetailView: View {
     let episode: PodcastEpisode
 
     @State private var generatedText: String?
-    @State private var selectedAction: AIAction?
-    @State private var targetLanguage = "English"
-    @State private var isLoading = false
+    @State private var isGenerating = false
     @State private var errorMessage: String?
-    @State private var showPlayer = false
-    @State private var playerController = AudioPlayerController()
-
-    private let service = EpisodeAIService()
-    private let translationLanguages = ["English", "French", "Spanish", "German"]
+    @State private var usedDescriptionFallback = false
 
     var body: some View {
         ScrollView {
-            VStack {
+            VStack(alignment: .leading, spacing: 20) {
                 EpisodeHeaderCard(episode: episode)
 
                 VStack(alignment: .leading, spacing: 12) {
                     Text("Episode Tools")
                         .font(.headline)
 
-                    HStack(spacing: 12) {
-                        Menu {
-                            Picker("Translate to", selection: $targetLanguage) {
-                                ForEach(translationLanguages, id: \.self) { language in
-                                    Text(language).tag(language)
-                                }
-                            }
-
-                            Divider()
-
-                            Button("Translate to \(targetLanguage)") {
-                                run(.translate)
-                            }
-                        } label: {
-                            Label("Translate", systemImage: "globe")
-                        }
-                        .buttonStyle(.bordered)
-                        .disabled(isLoading)
-
-                        Button {
-                            run(.summarize)
-                        } label: {
-                            Label("Summarize", systemImage: "text.alignleft")
-                        }
-                        .buttonStyle(.borderedProminent)
-                        .disabled(isLoading)
+                    Button {
+                        generate()
+                    } label: {
+                        Label("Summarize", systemImage: "text.alignleft")
                     }
-
-                    HStack {
-                        //Button {
-                            //let sampleURL = URL(string: episode.sourceURL) ?? URL(string: "https://example.com/audio.mp3")!
-                            //let download = DownloadedEpisode(episode: episode, audioURL: sampleURL)
-                            //playerController.play(download)
-                            //showPlayer = true
-                        //}  label: {
-                            //Label("Download", systemImage: "arrow.down.circle")
-                        //}
-                        //.buttonStyle(.bordered)
-
-                        //Spacer()
-                    }
+                    .buttonStyle(.borderedProminent)
+                    .disabled(isGenerating)
                 }
-                .frame(maxWidth: .infinity)
+                .frame(maxWidth: .infinity, alignment: .leading)
                 .padding()
                 .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 18))
 
-                if isLoading {
+                if isGenerating {
                     HStack(spacing: 10) {
                         ProgressView()
-                        Text("Creating your \(selectedAction == .translate ? "translation" : "summary")…")
+                        Text("Using the on-device model…")
                     }
                     .padding()
                 }
 
-                if let generatedText, let selectedAction {
+                if let generatedText {
                     VStack(alignment: .leading, spacing: 10) {
-                        Label(
-                            selectedAction == .translate
-                                ? "Translation to \(targetLanguage)"
-                                : "Summary",
-                            systemImage: selectedAction == .translate ? "globe" : "text.alignleft"
-                        )
-                        .font(.headline)
+                        Label("Summary", systemImage: "text.alignleft")
+                            .font(.headline)
 
                         Text(generatedText)
                             .textSelection(.enabled)
+
+                        if usedDescriptionFallback {
+                            Text("Based on the imported episode description. Add a Deepgram transcript for a full content summary.")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding()
@@ -101,7 +62,7 @@ struct EpisodeDetailView: View {
 
                 if let errorMessage {
                     ContentUnavailableView(
-                        "AI request unavailable",
+                        "On-device request unavailable",
                         systemImage: "exclamationmark.triangle",
                         description: Text(errorMessage)
                     )
@@ -111,41 +72,28 @@ struct EpisodeDetailView: View {
         }
         .navigationTitle("Episode")
         .navigationBarTitleDisplayMode(.inline)
-        .sheet(isPresented: $showPlayer) {
-            NowPlayingView(player: playerController)
-        }
     }
 
-    private func run(_ action: AIAction) {
-        selectedAction = action
+    private func generate() {
+        guard !isGenerating else { return }
+
         generatedText = nil
         errorMessage = nil
-        isLoading = true
+        usedDescriptionFallback = false
+        isGenerating = true
 
         Task {
             do {
-                let prompt = action == .summarize
-                    ? "Summarize this episode."
-                    : "Translate this episode to \(targetLanguage)."
-                let response = try await service.respond(
-                    action: action,
-                    query: prompt,
-                    messages: [ChatMessage(role: .user, text: prompt)],
-                    episode: episode,
-                    targetLanguage: action == .translate ? targetLanguage : nil
-                )
-                await MainActor.run {
-                    generatedText = response
-                    isLoading = false
-                }
+                let input = try await LocalTranscriptService.generationInput(for: episode)
+                usedDescriptionFallback = input.source == .description
+                generatedText = try await OnDeviceLanguageService.generate(input: input)
             } catch {
-                await MainActor.run {
-                    errorMessage = error.localizedDescription
-                    isLoading = false
-                }
+                errorMessage = error.localizedDescription
             }
+            isGenerating = false
         }
     }
+
 }
 
 private struct EpisodeHeaderCard: View {
