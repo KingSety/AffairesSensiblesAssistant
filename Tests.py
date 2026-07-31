@@ -7,14 +7,14 @@ import pytest
 from deepgram.core.api_error import ApiError
 
 from deepgram_api import (
-    create_summary,
     get_api_key,
     initialize_database,
     transcribe_file,
+    transcribe_url,
     upsert_episode,
     vector_key_for,
 )
-from download import download_file
+from download import download_file, resolve_audio_url
 
 
 def test_url_validation():
@@ -60,6 +60,18 @@ def test_download_file_accepts_string_output_path(tmp_path):
     )
     assert result == audio_dir
 
+
+def test_resolve_audio_url(tmp_path):
+    url = "https://www.radiofrance.fr/franceinter/podcasts/example"
+    with patch("download.yt_dlp.YoutubeDL") as youtube_dl:
+        downloader = youtube_dl.return_value.__enter__.return_value
+        downloader.extract_info.return_value = {"url": "https://cdn.example/audio.m4a"}
+
+        audio_url = resolve_audio_url(url)
+
+    assert audio_url == "https://cdn.example/audio.m4a"
+    downloader.extract_info.assert_called_once_with(url, download=False)
+
 def test_missing_api_key(monkeypatch):
     monkeypatch.delenv("DEEPGRAM_API_KEY", raising=False)
 
@@ -84,14 +96,16 @@ def test_transcription_failure():
         assert False, "Transcription should have failed but didn't."
 
 
-def test_create_summary():
-    openai_client = Mock()
-    openai_client.responses.create.return_value.output_text = "  A short summary.  "
+def test_transcribe_url_uses_resolved_media_url():
+    fake_deepgram = Mock()
+    fake_deepgram.listen.v1.media.transcribe_url.return_value.results.channels = [
+        Mock(alternatives=[Mock(transcript="Transcript")])
+    ]
 
-    summary = create_summary(openai_client, "A transcript.", "summary-model")
+    transcript = transcribe_url(fake_deepgram, "https://cdn.example/audio.m4a")
 
-    assert summary == "A short summary."
-    openai_client.responses.create.assert_called_once()
+    assert transcript == "Transcript"
+    fake_deepgram.listen.v1.media.transcribe_url.assert_called_once()
 
 
 def test_initialize_database_creates_episode_schema(tmp_path):
@@ -115,19 +129,16 @@ def test_initialize_database_creates_episode_schema(tmp_path):
     }.issubset(columns)
 
 
-def test_upsert_episode_invalidates_embedding_when_summary_changes(tmp_path):
+def test_upsert_episode_invalidates_embedding_when_transcript_changes(tmp_path):
     audio_path = Path("Audio/episode.m4a")
     transcript_path = Path("Transcripts/episode.txt")
-    summary_path = Path("Summaries/episode.txt")
 
     with initialize_database(tmp_path / "episodes.sqlite") as database:
         episode_id = upsert_episode(
             database,
             audio_path,
             transcript_path,
-            summary_path,
             "Transcript",
-            "Original summary",
         )
         database.execute(
             """
@@ -143,9 +154,7 @@ def test_upsert_episode_invalidates_embedding_when_summary_changes(tmp_path):
             database,
             audio_path,
             transcript_path,
-            summary_path,
-            "Transcript",
-            "Changed summary",
+            "Changed transcript",
         )
         row = database.execute(
             """
@@ -163,3 +172,20 @@ def test_vector_key_is_deterministic():
     assert vector_key_for(Path("Audio/example.mp3")) == vector_key_for(
         Path("elsewhere/example.mp3")
     )
+
+
+def test_upsert_episode_accepts_catalog_metadata(tmp_path):
+    with initialize_database(tmp_path / "episodes.sqlite") as database:
+        episode_id = upsert_episode(
+            database,
+            Path("temporary-audio.m4a"),
+            Path("Transcripts/catalog-id.txt"),
+            "Transcript",
+            episode_id="catalog-id",
+            source_file="Catalog episode.m4a",
+        )
+        row = database.execute(
+            "SELECT id, source_file FROM episodes WHERE id = ?", (episode_id,)
+        ).fetchone()
+
+    assert row == ("catalog-id", "Catalog episode.m4a")
