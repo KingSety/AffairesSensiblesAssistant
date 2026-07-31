@@ -2,6 +2,12 @@
 
 ## Add the package and database
 
+Before testing simulation, run the following commands inside the project directory:
+1. git lfs install
+2. git lfs pull
+3. confirm the database was downloaded using file ios/Resources/episodes.sqlite (should say SQLite database)
+
+
 
 1. Open deepgram_video_parser-master/PodcastTranslate/PodcastTranslate.xcodeproj on Xcode
 2. In Xcode, add the local package at `ios/LocalVectorSearch` to the app target if not included.
