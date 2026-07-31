@@ -23,7 +23,7 @@ French is a hard requirement. `AppleSentenceEmbedder.isAvailable` can be used
 to disable the search UI before initialization. The package never falls back to
 another language model.
 
-Generate missing vectors and search from an asynchronous task:
+Generate missing transcript vectors and search from an asynchronous task:
 
 ```swift
 Task {

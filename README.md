@@ -1,7 +1,7 @@
-# Deepgram video parser with local iOS vector search
+# Deepgram transcript pipeline with local iOS vector search
 
-This project transcribes audio/video with Deepgram, summarizes each transcript
-with OpenAI, and writes the episode text to a local SQLite database.
+This project transcribes audio/video with Deepgram and writes transcripts to a
+local SQLite database. The iOS app embeds and searches that text on-device.
 
 ## Python pipeline
 
@@ -15,10 +15,7 @@ Copy `.env.example` to `.env` and configure:
 
 ```bash
 DEEPGRAM_API_KEY=...
-OPENAI_API_KEY=...
 ```
-
-`OPENAI_SUMMARY_MODEL` is optional and defaults to `gpt-4.1-mini`
 
 Place supported audio/video files in `Audio/`, then run:
 
@@ -26,15 +23,33 @@ Place supported audio/video files in `Audio/`, then run:
 python3 deepgram_api.py
 ```
 
-If transcripts and summaries already exist, rebuild the database without
-calling Deepgram or OpenAI:
+If transcripts already exist, rebuild the database without calling Deepgram:
 
 ```bash
 python3 build_local_database.py
 ```
 
-Updating a summary clears its old embedding so the iOS layer will regenerate a
-compatible vector.
+Updating a transcript clears its old embedding so the iOS layer will regenerate
+a compatible vector.
+
+### Import every catalog transcript
+
+To resolve each episode in `ios/Resources/imported_episodes.json`, have Deepgram
+transcribe its media URL, and store only its transcript, run:
+
+```bash
+python3 import_catalog_transcripts.py
+```
+
+The importer does not keep audio files. It writes to `ios/Working/episodes.sqlite`
+and atomically publishes a stable snapshot to `ios/Resources/episodes.sqlite`
+every five episodes, so Xcode never bundles a partially written database. It
+commits each episode individually, skips episodes already present in the working
+database, retries temporary failures, and records any final failures in
+`transcript_import_failures.json`. Re-run the same command to resume a stopped
+import. Once every catalog transcript has been saved, it also creates the
+HNSW-style chunk index before publishing the final database. This final step is
+what makes the first local search as fast as later searches.
 
 ## Import a Radio France podcast catalog
 
@@ -63,36 +78,27 @@ Temporary DNS, timeout, rate-limit, and server errors are retried three times;
 use `--retries 5` to retry more often or `--request-timeout 60` for a slower
 connection.
 
-## iOS AI backend
-
-The iOS app sends retrieved episode context to a backend; it never stores an
-OpenAI API key in the app. For local simulator development, configure
-`OPENAI_API_KEY` in `.env` and run:
-
-```bash
-python3 ai_server.py
-```
-
-The app defaults to `http://127.0.0.1:8080`. For a physical device, run the
-backend behind an authenticated HTTPS endpoint and set `AIBackendURL` in the
-app configuration. Do not expose the development server directly to the
-internet.
-
 ## Apple embeddings and local search
 
 The Swift package in `ios/LocalVectorSearch` contains:
 
 - `EpisodeDatabase`: SQLite storage and bundled-database installation.
 - `AppleSentenceEmbedder`: versioned French `NLEmbedding` vectors.
-- `LocalEpisodeSearch`: exact cosine-equivalent search with Accelerate.
-- `build-episode-embeddings`: an optional macOS seed-index builder.
+- `LocalEpisodeSearch`: a persistent HNSW-style neighbor graph that uses
+  cosine similarity only for a small set of nearby transcript chunks.
+- `build-episode-embeddings`: the macOS builder for transcript chunks and the
+  ready-to-use local search index.
 
 See `ios/README.md` for Xcode integration and usage.
+
+No OpenAI service or Python backend is required by the iOS app. Build the
+index before bundling the database so the app opens a ready-to-search data pack
+without creating vectors or copying the library during onboarding:
 
 
 Build the Swift package:
 
 ```bash
 cd ios/LocalVectorSearch
-swift build
+swift run build-episode-embeddings ../Working/episodes.sqlite
 ```

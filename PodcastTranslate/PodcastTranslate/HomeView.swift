@@ -5,37 +5,58 @@
 //  Created by Sety Tekeu on 7/25/26.
 //
 
-import Foundation
+import LocalVectorSearch
 import SwiftUI
 
 struct HomeView: View {
     @State private var userInput = ""
-    @State private var messages = [
-        ChatMessage(
-            role: .assistant,
-            text: "Hi, I’m your library assistant. Ask me to summarize, find, or explore your imported episodes."
-        )
-    ]
-    @State private var isResponding = false
+    @State private var queryHistory: [PodcastSearchQuery] = []
+    @State private var isSearchIndexReady = false
+    @State private var searchIndexError: String?
     @FocusState private var isComposerFocused: Bool
 
     var body: some View {
         NavigationStack {
             VStack(spacing: 0) {
-                ChatTranscript(messages: messages, isResponding: isResponding)
+                if let searchIndexError {
+                    ContentUnavailableView(
+                        "Local search unavailable",
+                        systemImage: "exclamationmark.triangle",
+                        description: Text(searchIndexError)
+                    )
+                } else if !isSearchIndexReady {
+                    ContentUnavailableView(
+                        "Preparing local search",
+                        systemImage: "magnifyingglass",
+                        description: Text("Opening your ready-to-search local podcast library.")
+                    )
+                    .overlay(alignment: .top) {
+                        ProgressView()
+                            .padding(.top, 52)
+                    }
+                } else if queryHistory.isEmpty {
+                    ContentUnavailableView(
+                        "Ask your podcast assistant",
+                        systemImage: "sparkles",
+                        description: Text("Describe a topic to find similar podcasts from your local Deepgram transcripts.")
+                    )
+                } else {
+                    ScrollView {
+                        LazyVStack(spacing: 12) {
+                            ForEach(queryHistory) { query in
+                                PodcastSearchQueryView(query: query)
+                            }
+                        }
+                        .padding()
+                    }
+                }
 
                 Divider()
 
-                VStack(alignment: .leading, spacing: 10) {
-                    if messages.count == 1 {
-                        ChatSuggestions { suggestion in
-                            submit(suggestion)
-                        }
-                    }
-
+                VStack(spacing: 10) {
                     HStack(alignment: .bottom, spacing: 10) {
                         TextField(
-                            "Ask about your library…",
+                            "Find podcasts about…",
                             text: $userInput,
                             axis: .vertical
                         )
@@ -48,141 +69,196 @@ struct HomeView: View {
                         Button {
                             submit(userInput)
                         } label: {
-                            Image(systemName: "arrow.up.circle.fill")
+                            Image(systemName: "magnifyingglass.circle.fill")
                                 .font(.title2)
                         }
-                        .disabled(userInput.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || isResponding)
-                        .accessibilityLabel("Send message")
+                        .disabled(
+                            userInput.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                                || !isSearchIndexReady
+                        )
+                        .accessibilityLabel("Find similar podcasts")
                     }
                     .padding(12)
                     .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 18))
                 }
                 .padding()
             }
-            .navigationTitle("AI Chat")
+            .navigationTitle("Podcast Assistant")
             .navigationBarTitleDisplayMode(.inline)
+        }
+        .task {
+            do {
+                try await LocalSearchIndexPrewarmer.shared.prepare()
+                isSearchIndexReady = true
+            } catch {
+                searchIndexError = error.localizedDescription
+            }
         }
     }
 
     private func submit(_ draft: String) {
         let query = draft.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !query.isEmpty, !isResponding else {
+        guard !query.isEmpty, isSearchIndexReady else {
             return
         }
 
-        messages.append(ChatMessage(role: .user, text: query))
+        let queryID = UUID()
         userInput = ""
         isComposerFocused = false
-        isResponding = true
+        queryHistory.append(PodcastSearchQuery(id: queryID, text: query, isSearching: true))
 
         Task {
-            let response: String
             do {
-                response = try await EpisodeAIService().respond(
-                    action: .chat,
-                    query: query,
-                    messages: messages
-                )
+                try await LocalSearchIndexPrewarmer.shared.prepare()
+                let frenchQuery = await OnDeviceLanguageService.frenchSearchQuery(for: query)
+                let results = try await LocalTranscriptService.search(frenchQuery, limit: 5)
+                updateQuery(id: queryID) { searchQuery in
+                    searchQuery.results = results
+                    searchQuery.isSearching = false
+                }
             } catch {
-                response = "I couldn't complete that request. \(error.localizedDescription)"
-            }
-            await MainActor.run {
-                messages.append(ChatMessage(role: .assistant, text: response))
-                isResponding = false
-            }
-        }
-    }
-}
-
-private struct ChatTranscript: View {
-    let messages: [ChatMessage]
-    let isResponding: Bool
-
-    var body: some View {
-        ScrollViewReader { scrollProxy in
-            ScrollView {
-                LazyVStack(spacing: 14) {
-                    ForEach(messages) { message in
-                        ChatBubble(message: message)
-                            .id(message.id)
-                    }
-
-                    if isResponding {
-                        HStack(spacing: 8) {
-                            ProgressView()
-                            Text("Searching your library…")
-                                .foregroundStyle(.secondary)
-                            Spacer()
-                        }
-                        .id("response-progress")
-                    }
-                }
-                .padding()
-            }
-            .onChange(of: messages.count) {
-                guard let lastMessage = messages.last else {
-                    return
-                }
-                withAnimation {
-                    scrollProxy.scrollTo(lastMessage.id, anchor: .bottom)
-                }
-            }
-            .onChange(of: isResponding) {
-                if isResponding {
-                    withAnimation {
-                        scrollProxy.scrollTo("response-progress", anchor: .bottom)
-                    }
+                updateQuery(id: queryID) { searchQuery in
+                    searchQuery.errorMessage = error.localizedDescription
+                    searchQuery.isSearching = false
                 }
             }
         }
     }
+
+    private func updateQuery(
+        id: UUID,
+        update: (inout PodcastSearchQuery) -> Void
+    ) {
+        guard let index = queryHistory.firstIndex(where: { $0.id == id }) else {
+            return
+        }
+        update(&queryHistory[index])
+    }
 }
 
-private struct ChatBubble: View {
-    let message: ChatMessage
+private struct PodcastSearchQuery: Identifiable {
+    let id: UUID
+    let text: String
+    var results: [LocalTranscriptSearchResult] = []
+    var errorMessage: String?
+    var isSearching: Bool
+}
+
+private struct PodcastSearchQueryView: View {
+    let query: PodcastSearchQuery
 
     var body: some View {
-        HStack {
-            if message.role == .user {
-                Spacer(minLength: 48)
-            }
-
-            Text(message.text)
-                .foregroundStyle(message.role == .user ? .white : .primary)
+        VStack(alignment: .leading, spacing: 12) {
+            Text(query.text)
+                .frame(maxWidth: .infinity, alignment: .trailing)
                 .padding(12)
-                .background(
-                    message.role == .user ? Color.accentColor : Color.secondary.opacity(0.12),
-                    in: RoundedRectangle(cornerRadius: 16)
+                .background(.tint.opacity(0.16), in: RoundedRectangle(cornerRadius: 16))
+
+            if query.isSearching {
+                ProgressView("Finding similar episodes…")
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.vertical, 8)
+            } else if let errorMessage = query.errorMessage {
+                ContentUnavailableView(
+                    "Local search unavailable",
+                    systemImage: "exclamationmark.triangle",
+                    description: Text(errorMessage)
                 )
+            } else if query.results.isEmpty {
+                ContentUnavailableView(
+                    "No similar podcasts found",
+                    systemImage: "magnifyingglass",
+                    description: Text("Try a broader topic or add more local Deepgram transcripts.")
+                )
+            } else {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("Similar Podcasts")
+                        .font(.headline)
+                    Text("Matched from your local transcripts")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
 
-            if message.role == .assistant {
-                Spacer(minLength: 48)
-            }
-        }
-        .frame(maxWidth: .infinity)
-    }
-}
-
-private struct ChatSuggestions: View {
-    let onSelect: (String) -> Void
-
-    private let suggestions = [
-        "Summarize my latest episodes",
-        "Find episodes about history",
-        "What can I listen to in French?"
-    ]
-
-    var body: some View {
-        ScrollView(.horizontal, showsIndicators: false) {
-            HStack {
-                ForEach(suggestions, id: \.self) { suggestion in
-                    Button(suggestion) {
-                        onSelect(suggestion)
+                    ForEach(Array(query.results.enumerated()), id: \.element.id) { index, result in
+                        resultLink(for: result, rank: index + 1)
                     }
-                    .buttonStyle(.bordered)
                 }
             }
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    @ViewBuilder
+    private func resultLink(
+        for result: LocalTranscriptSearchResult,
+        rank: Int
+    ) -> some View {
+        if let podcast = result.podcast {
+            NavigationLink {
+                EpisodeDetailView(episode: podcast)
+            } label: {
+                TranscriptSearchResultCard(result: result, rank: rank)
+            }
+            .buttonStyle(.plain)
+        } else {
+            NavigationLink {
+                TranscriptView(result: result)
+            } label: {
+                TranscriptSearchResultCard(result: result, rank: rank)
+            }
+            .buttonStyle(.plain)
+        }
+    }
+}
+
+private struct TranscriptSearchResultCard: View {
+    let result: LocalTranscriptSearchResult
+    let rank: Int
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text(result.title)
+                .font(.headline)
+                .foregroundStyle(.primary)
+
+            Text(result.excerpt)
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+                .lineLimit(4)
+
+            Text(matchLabel)
+                .font(.caption)
+                .foregroundStyle(.tertiary)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding()
+        .background(.background, in: RoundedRectangle(cornerRadius: 14))
+        .overlay {
+            RoundedRectangle(cornerRadius: 14)
+                .stroke(.quaternary, lineWidth: 1)
+        }
+    }
+
+    private var matchLabel: String {
+        switch result.matchKind {
+        case .semantic:
+            return "#\(rank) · Local similarity \(result.score.formatted(.percent.precision(.fractionLength(0))))"
+        case .transcriptKeyword:
+            return "#\(rank) · Matching transcript topic"
+        }
+    }
+}
+
+private struct TranscriptView: View {
+    let result: LocalTranscriptSearchResult
+
+    var body: some View {
+        ScrollView {
+            Text(result.episode.transcript)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding()
+        }
+        .navigationTitle(result.title)
+        .navigationBarTitleDisplayMode(.inline)
     }
 }
 
