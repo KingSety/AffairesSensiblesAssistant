@@ -25,9 +25,6 @@ struct ContentView: View {
                     Label("Settings", systemImage: "gearshape")
                 }
         }
-        .task {
-            try? await LocalSearchIndexPrewarmer.shared.prepare()
-        }
     }
 }
 
