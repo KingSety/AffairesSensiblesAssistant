@@ -20,7 +20,11 @@ struct EpisodeDetailView: View {
                     Button {
                         generate()
                     } label: {
-                        Label("Summarize", systemImage: "text.alignleft")
+                        if episode.transcriptAvailable {
+                            Label("Summarize", systemImage: "text.alignleft")
+                        } else {
+                            Label("Short Description", systemImage: "text.alignleft")
+                        }
                     }
                     .buttonStyle(.borderedProminent)
                     .disabled(isGenerating)
@@ -45,7 +49,7 @@ struct EpisodeDetailView: View {
                         Text(generatedText)
                             .textSelection(.enabled)
 
-                        if usedDescriptionFallback {
+                        if !episode.transcriptAvailable && usedDescriptionFallback {
                             Text("Based on the imported episode description. Add a Deepgram transcript for a full content summary.")
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
@@ -113,9 +117,23 @@ private struct EpisodeHeaderCard: View {
                         .foregroundStyle(.secondary)
                 }
             }
+            .clipShape(RoundedRectangle(cornerRadius: 18))
+            .overlay(alignment: .topTrailing) {
+                HStack(spacing: 6) {
+                    Image(systemName: episode.transcriptAvailable ? "checkmark.circle.fill" : "xmark.circle.fill")
+                        .imageScale(.small)
+                        .foregroundStyle(episode.transcriptAvailable ? .green : .secondary)
+                    Text(episode.transcriptAvailable ? "Transcript Available" : "Transcript Not Available")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.primary)
+                }
+                .padding(.horizontal, 10)
+                .padding(.vertical, 6)
+                .background(.ultraThinMaterial, in: Capsule())
+                .padding(8)
+            }
             .frame(maxWidth: .infinity)
             .frame(height: 220)
-            .clipShape(RoundedRectangle(cornerRadius: 18))
 
             Text(episode.title)
                 .font(.title2.bold())

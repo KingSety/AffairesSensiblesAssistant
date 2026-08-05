@@ -11,30 +11,12 @@ import SwiftUI
 struct HomeView: View {
     @State private var userInput = ""
     @State private var queryHistory: [PodcastSearchQuery] = []
-    @State private var isSearchIndexReady = false
-    @State private var searchIndexError: String?
     @FocusState private var isComposerFocused: Bool
 
     var body: some View {
         NavigationStack {
             VStack(spacing: 0) {
-                if let searchIndexError {
-                    ContentUnavailableView(
-                        "Local search unavailable",
-                        systemImage: "exclamationmark.triangle",
-                        description: Text(searchIndexError)
-                    )
-                } else if !isSearchIndexReady {
-                    ContentUnavailableView(
-                        "Preparing local search",
-                        systemImage: "magnifyingglass",
-                        description: Text("Opening your ready-to-search local podcast library.")
-                    )
-                    .overlay(alignment: .top) {
-                        ProgressView()
-                            .padding(.top, 52)
-                    }
-                } else if queryHistory.isEmpty {
+                if queryHistory.isEmpty {
                     ContentUnavailableView(
                         "Ask your podcast assistant",
                         systemImage: "sparkles",
@@ -74,7 +56,6 @@ struct HomeView: View {
                         }
                         .disabled(
                             userInput.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-                                || !isSearchIndexReady
                         )
                         .accessibilityLabel("Find similar podcasts")
                     }
@@ -86,19 +67,11 @@ struct HomeView: View {
             .navigationTitle("Podcast Assistant")
             .navigationBarTitleDisplayMode(.inline)
         }
-        .task {
-            do {
-                try await LocalSearchIndexPrewarmer.shared.prepare()
-                isSearchIndexReady = true
-            } catch {
-                searchIndexError = error.localizedDescription
-            }
-        }
     }
 
     private func submit(_ draft: String) {
         let query = draft.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !query.isEmpty, isSearchIndexReady else {
+        guard !query.isEmpty else {
             return
         }
 
@@ -109,7 +82,6 @@ struct HomeView: View {
 
         Task {
             do {
-                try await LocalSearchIndexPrewarmer.shared.prepare()
                 let frenchQuery = await OnDeviceLanguageService.frenchSearchQuery(for: query)
                 let results = try await LocalTranscriptService.search(frenchQuery, limit: 5)
                 updateQuery(id: queryID) { searchQuery in
