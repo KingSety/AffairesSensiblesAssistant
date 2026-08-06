@@ -39,7 +39,6 @@ struct SettingsView: View {
     private var preferenceSection: some View {
         Section("Preferences") {
             Toggle("Dark Mode", isOn: $isDarkMode)
-            Toggle("Enable Notifications", isOn: $notificationsEnabled)
         }
     }
     

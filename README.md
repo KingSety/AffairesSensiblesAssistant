@@ -64,6 +64,28 @@ import. Once every catalog transcript has been saved, it also creates the
 HNSW-style chunk index before publishing the final database. This final step is
 what makes the first local search as fast as later searches.
 
+Media resolution uses these sources in order:
+
+1. A matching file in `Audio/` (named with the catalog ID, Radio France numeric
+   ID, or exact episode title).
+2. The audio URL exposed by the episode page.
+3. The enclosure in the official Affaires sensibles RSS feed.
+
+If all three sources confirm that the publisher no longer provides the audio,
+the importer stores an `unavailable` media state and continues. The iOS episode
+screen then displays a dedicated “Episode unavailable” message. Temporary
+network and API errors remain failures and are retried; they are not mislabeled
+as unavailable. You can supply archived audio later in `Audio/` and rerun the
+importer to replace the unavailable state with a transcript.
+
+Use a different local archive or official feed when needed:
+
+```bash
+python3 import_catalog_transcripts.py \
+  --audio-dir /path/to/authorized-audio \
+  --rss-feed-url https://example.com/official-feed.xml
+```
+
 ## Import a Radio France podcast catalog
 
 Export the episodes from a Radio France podcast listing into a JSON catalog for
@@ -88,6 +110,7 @@ python3 podcast_scraper.py 'https://www.radiofrance.fr/franceinter/podcasts/affa
 
 The scraper follows Radio France's published pagination, pauses briefly between
 requests, and removes duplicate episode URLs before writing the catalog.
+Series landing pages without a numeric episode ID are excluded.
 Temporary DNS, timeout, rate-limit, and server errors are retried three times;
 use `--retries 5` to retry more often or `--request-timeout 60` for a slower
 connection.
