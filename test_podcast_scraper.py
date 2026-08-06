@@ -56,3 +56,14 @@ def test_merge_episodes_deduplicates_episodes_by_source_url():
     )
 
     assert merge_episodes([episode], [episode]) == [episode]
+
+
+def test_parse_radio_france_listing_excludes_series_pages_without_episode_id():
+    html = '''
+    __typename:"Expression",kind:"antenne",type:"episode",duration:2898,
+    titleProps:{href:"/franceinter/podcasts/serie-le-grand-charles-attend",
+    text:"Une série.",title:"Le Grand Charles attend"},
+    visual:{src:"https://www.radiofrance.fr/pikapi/images/example"},concept:void 0
+    '''
+
+    assert parse_radio_france_listing(html) == []

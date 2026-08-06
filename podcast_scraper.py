@@ -31,6 +31,7 @@ EXPRESSION_PATTERN = re.compile(
 PUBLISHED_DATE_PATTERN = re.compile(r'publishedDate:"(?P<date>(?:\\.|[^"\\])*)"')
 DURATION_PATTERN = re.compile(r'duration:(?P<duration>\d+)')
 LAST_PAGE_PATTERN = re.compile(r'lastPage:(?P<last_page>\d+)')
+EPISODE_URL_PATTERN = re.compile(r"-\d+/?$")
 
 
 @dataclass(frozen=True)
@@ -68,7 +69,9 @@ def parse_radio_france_listing(html: str) -> list[ImportedEpisode]:
             continue
 
         source_url = urljoin(RADIO_FRANCE_ORIGIN, href)
-        if source_url in seen_urls:
+        if source_url in seen_urls or not EPISODE_URL_PATTERN.search(
+            urlsplit(source_url).path
+        ):
             continue
 
         expression = match.group(0)

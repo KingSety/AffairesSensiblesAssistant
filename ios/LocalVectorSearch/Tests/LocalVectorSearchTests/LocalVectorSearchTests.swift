@@ -127,6 +127,35 @@ final class LocalVectorSearchTests: XCTestCase {
         XCTAssertEqual(try database.fetchCatalogEpisodes().first?.id, "legacy-id")
     }
 
+    func testCatalogExposesUnavailableMediaMessage() throws {
+        let databaseURL = temporaryDatabaseURL()
+        defer { try? FileManager.default.removeItem(at: databaseURL) }
+        let database = try EpisodeDatabase(url: databaseURL)
+
+        try executeSQL(
+            """
+            INSERT INTO episodes (
+                id, title, source_url, transcript_status, media_status,
+                availability_message, source_file
+            ) VALUES (
+                'unavailable-id', 'Unavailable episode',
+                'https://example.com/unavailable', 'description_only',
+                'unavailable', 'This episode is no longer available.',
+                'Unavailable episode.m4a'
+            );
+            """,
+            at: databaseURL
+        )
+
+        let metadata = try XCTUnwrap(database.fetchCatalogEpisodes().first)
+        XCTAssertFalse(metadata.transcriptAvailable)
+        XCTAssertEqual(metadata.mediaAvailability, .unavailable)
+        XCTAssertEqual(
+            metadata.availabilityMessage,
+            "This episode is no longer available."
+        )
+    }
+
     private func chunk(
         id: String,
         index: Int,

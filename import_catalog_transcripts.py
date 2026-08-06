@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 from contextlib import contextmanager
+import json
 import os
 from pathlib import Path
 import signal
@@ -20,17 +21,24 @@ from deepgram_api import (
     get_api_key,
     initialize_database,
     load_catalog,
+    mark_episode_unavailable,
     sync_catalog,
+    transcribe_file,
     transcribe_url,
     upsert_episode,
 )
-from download import resolve_audio_url
+from download import (
+    DEFAULT_RADIO_FRANCE_RSS_URL,
+    EpisodeAudioResolver,
+    MediaUnavailableError,
+)
 
 
 ROOT_DIR = Path(__file__).resolve().parent
 DEFAULT_CATALOG_PATH = ROOT_DIR / "ios" / "Resources" / "imported_episodes.json"
 DEFAULT_FAILURE_LOG_PATH = ROOT_DIR / "transcript_import_failures.json"
 DEFAULT_WORKING_DATABASE_PATH = ROOT_DIR / "ios" / "Working" / "episodes.sqlite"
+DEFAULT_LOCAL_AUDIO_DIR = ROOT_DIR / "Audio"
 
 
 class EpisodeTimeoutError(TimeoutError):
@@ -53,18 +61,6 @@ def episode_deadline(seconds: int):
 
 def source_file_name(episode: dict[str, object]) -> str:
     return f"{episode['title']}.m4a"
-
-
-def is_permanently_unavailable_media(error: Exception) -> bool:
-    message = str(error).casefold()
-    return any(
-        marker in message
-        for marker in (
-            "http error 404",
-            "unable to extract audio data",
-            "could not resolve an audio url",
-        )
-    )
 
 
 def existing_episode_ids(database: sqlite3.Connection) -> set[str]:
@@ -93,6 +89,7 @@ def existing_source_files(database: sqlite3.Connection) -> set[str]:
 def transcribe_episode(
     database: sqlite3.Connection,
     deepgram: DeepgramClient,
+    audio_resolver: EpisodeAudioResolver,
     episode: dict[str, object],
     retries: int,
     timeout_seconds: int,
@@ -100,8 +97,11 @@ def transcribe_episode(
     for attempt in range(retries + 1):
         try:
             with episode_deadline(timeout_seconds):
-                audio_url = resolve_audio_url(episode["source_url"])
-                transcript = transcribe_url(deepgram, audio_url)
+                audio = audio_resolver.resolve(episode)
+                if audio.is_local_file:
+                    transcript = transcribe_file(deepgram, Path(audio.location))
+                else:
+                    transcript = transcribe_url(deepgram, str(audio.location))
 
             transcript_path = OUTPUT_DIR / f"{episode['id']}.txt"
             transcript_path.write_text(transcript, encoding="utf-8")
@@ -117,9 +117,9 @@ def transcribe_episode(
             return
         except KeyboardInterrupt:
             raise
+        except MediaUnavailableError:
+            raise
         except Exception as error:
-            if is_permanently_unavailable_media(error):
-                raise
             if attempt == retries:
                 raise
             time.sleep(2**attempt)
@@ -150,6 +150,11 @@ def copy_database(source_path: Path, destination_path: Path) -> None:
     finally:
         destination.close()
         source.close()
+    for sidecar in (
+        destination_path.with_name(f"{destination_path.name}-wal"),
+        destination_path.with_name(f"{destination_path.name}-shm"),
+    ):
+        sidecar.unlink(missing_ok=True)
     os.replace(temporary_path, destination_path)
 
 
@@ -159,14 +164,27 @@ def prepare_working_database(database_path: Path, bundled_database_path: Path) -
     copy_database(bundled_database_path, database_path)
 
 
-def has_every_catalog_transcript(
+def has_resolved_every_catalog_episode(
     catalog_path: Path,
     database_path: Path,
 ) -> bool:
     expected_ids = {episode["id"] for episode in load_catalog(catalog_path)}
     with sqlite3.connect(database_path) as database:
-        completed_ids = existing_episode_ids(database)
-    return expected_ids.issubset(completed_ids)
+        resolved_ids = {
+            row[0]
+            for row in database.execute(
+                """
+                SELECT id
+                FROM episodes
+                WHERE media_status = 'unavailable'
+                   OR EXISTS (
+                       SELECT 1 FROM episode_transcripts
+                       WHERE episode_id = episodes.id AND trim(transcript) != ''
+                   )
+                """
+            )
+        }
+    return expected_ids.issubset(resolved_ids)
 
 
 def prebuild_local_search_index(database_path: Path) -> None:
@@ -195,7 +213,9 @@ def import_catalog(
     timeout_seconds: int,
     limit: int | None,
     publish_every: int,
-) -> tuple[int, int, int]:
+    audio_dir: Path | None,
+    rss_feed_url: str,
+) -> tuple[int, int, int, int]:
     episodes = load_catalog(catalog_path)
     if limit is not None:
         episodes = episodes[:limit]
@@ -210,8 +230,13 @@ def import_catalog(
 
     load_dotenv()
     deepgram = DeepgramClient(api_key=get_api_key(), timeout=90, max_retries=1)
+    audio_resolver = EpisodeAudioResolver(
+        audio_dir=audio_dir,
+        rss_feed_url=rss_feed_url,
+    )
     imported = 0
     skipped = 0
+    unavailable = 0
     failures: list[dict[str, str]] = []
     prepare_working_database(database_path, bundled_database_path)
 
@@ -232,6 +257,7 @@ def import_catalog(
                 transcribe_episode(
                     database,
                     deepgram,
+                    audio_resolver,
                     episode,
                     retries,
                     timeout_seconds,
@@ -239,6 +265,21 @@ def import_catalog(
             except KeyboardInterrupt:
                 write_failure_log(failures, failure_log_path)
                 raise
+            except MediaUnavailableError as error:
+                database.rollback()
+                mark_episode_unavailable(database, episode_id, str(error))
+                database.commit()
+                unavailable += 1
+                failures.append(
+                    {
+                        "id": episode_id,
+                        "title": episode["title"],
+                        "source_url": episode["source_url"],
+                        "status": "unavailable",
+                        "error": str(error),
+                    }
+                )
+                print(f"Unavailable: {error}")
             except Exception as error:
                 database.rollback()
                 failures.append(
@@ -261,11 +302,18 @@ def import_catalog(
                 time.sleep(delay_seconds)
 
     write_failure_log(failures, failure_log_path)
-    if limit is None and not failures and has_every_catalog_transcript(catalog_path, database_path):
+    unresolved_failures = [
+        failure for failure in failures if failure.get("status") != "unavailable"
+    ]
+    if (
+        limit is None
+        and not unresolved_failures
+        and has_resolved_every_catalog_episode(catalog_path, database_path)
+    ):
         print("Building the persistent local transcript index…")
         prebuild_local_search_index(database_path)
     copy_database(database_path, bundled_database_path)
-    return imported, skipped, len(failures)
+    return imported, skipped, unavailable, len(unresolved_failures)
 
 
 def main() -> None:
@@ -286,9 +334,23 @@ def main() -> None:
     )
     parser.add_argument("--limit", type=int)
     parser.add_argument("--publish-every", type=int, default=5)
+    parser.add_argument(
+        "--audio-dir",
+        type=Path,
+        default=DEFAULT_LOCAL_AUDIO_DIR,
+        help=(
+            "Folder containing fallback audio named by episode ID, Radio France ID, "
+            "or exact episode title."
+        ),
+    )
+    parser.add_argument(
+        "--rss-feed-url",
+        default=DEFAULT_RADIO_FRANCE_RSS_URL,
+        help="Official podcast RSS feed used when an episode page has no audio URL.",
+    )
     arguments = parser.parse_args()
 
-    imported, skipped, failed = import_catalog(
+    imported, skipped, unavailable, failed = import_catalog(
         catalog_path=arguments.catalog,
         database_path=arguments.database,
         bundled_database_path=arguments.bundle_database,
@@ -298,8 +360,13 @@ def main() -> None:
         timeout_seconds=arguments.episode_timeout,
         limit=arguments.limit,
         publish_every=arguments.publish_every,
+        audio_dir=arguments.audio_dir,
+        rss_feed_url=arguments.rss_feed_url,
     )
-    print(f"Imported: {imported}; skipped: {skipped}; failed: {failed}")
+    print(
+        f"Imported: {imported}; skipped: {skipped}; "
+        f"unavailable: {unavailable}; failed: {failed}"
+    )
 
 
 if __name__ == "__main__":
