@@ -36,7 +36,7 @@ OUTPUT_DIR.mkdir(exist_ok=True)
 IOS_RESOURCES_DIR = ROOT_DIR / "ios" / "Resources"
 DATABASE_PATH = IOS_RESOURCES_DIR / "episodes.sqlite"
 CATALOG_PATH = IOS_RESOURCES_DIR / "imported_episodes.json"
-DATABASE_SCHEMA_VERSION = 2
+DATABASE_SCHEMA_VERSION = 3
 
 # Common audio/video extensions we want to accept
 AUDIO_EXTENSIONS = {
@@ -108,6 +108,9 @@ def _create_episode_schema(database: sqlite3.Connection) -> None:
             catalog_position INTEGER NOT NULL DEFAULT 0,
             transcript_status TEXT NOT NULL DEFAULT 'missing'
                 CHECK (transcript_status IN ('available', 'description_only', 'missing')),
+            media_status TEXT NOT NULL DEFAULT 'unknown'
+                CHECK (media_status IN ('available', 'unavailable', 'unknown')),
+            availability_message TEXT NOT NULL DEFAULT '',
             source_file TEXT NOT NULL DEFAULT '',
             updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
         )
@@ -131,6 +134,16 @@ def _create_episode_schema(database: sqlite3.Connection) -> None:
     if "catalog_position" not in _table_columns(database, "episodes"):
         database.execute(
             "ALTER TABLE episodes ADD COLUMN catalog_position INTEGER NOT NULL DEFAULT 0"
+        )
+    if "media_status" not in _table_columns(database, "episodes"):
+        database.execute(
+            "ALTER TABLE episodes ADD COLUMN media_status TEXT NOT NULL "
+            "DEFAULT 'unknown' CHECK (media_status IN "
+            "('available', 'unavailable', 'unknown'))"
+        )
+    if "availability_message" not in _table_columns(database, "episodes"):
+        database.execute(
+            "ALTER TABLE episodes ADD COLUMN availability_message TEXT NOT NULL DEFAULT ''"
         )
     database.execute(
         "CREATE INDEX IF NOT EXISTS episodes_source_file_idx ON episodes(source_file)"
@@ -159,12 +172,14 @@ def _migrate_legacy_episode_schema(database: sqlite3.Connection) -> None:
             """
             INSERT INTO episodes (
                 id, title, short_description, source_url, artwork_url,
-                language, transcript_status, source_file, updated_at
+                language, transcript_status, media_status,
+                availability_message, source_file, updated_at
             )
             SELECT id, source_file, '', '', '',
                    COALESCE(NULLIF(embedding_language, ''), 'fr'),
                    CASE WHEN trim(transcript) = '' THEN 'missing' ELSE 'available' END,
-                   source_file, updated_at
+                   CASE WHEN trim(transcript) = '' THEN 'unknown' ELSE 'available' END,
+                   '', source_file, updated_at
             FROM episodes_legacy
             """
         )
@@ -241,6 +256,8 @@ def sync_catalog(
                 episode.get("duration_seconds"),
                 position,
                 "description_only" if description else "missing",
+                "unknown",
+                "",
                 f"{title}.m4a",
             )
         )
@@ -250,8 +267,8 @@ def sync_catalog(
         INSERT INTO episodes (
             id, title, short_description, source_url, artwork_url, language,
             published_date, duration_seconds, catalog_position,
-            transcript_status, source_file
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            transcript_status, media_status, availability_message, source_file
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(id) DO UPDATE SET
             title = excluded.title,
             short_description = excluded.short_description,
@@ -267,6 +284,20 @@ def sync_catalog(
                     WHERE episode_id = excluded.id AND trim(transcript) != ''
                 ) THEN 'available'
                 ELSE excluded.transcript_status
+            END,
+            media_status = CASE
+                WHEN EXISTS (
+                    SELECT 1 FROM episode_transcripts
+                    WHERE episode_id = excluded.id AND trim(transcript) != ''
+                ) THEN 'available'
+                ELSE episodes.media_status
+            END,
+            availability_message = CASE
+                WHEN EXISTS (
+                    SELECT 1 FROM episode_transcripts
+                    WHERE episode_id = excluded.id AND trim(transcript) != ''
+                ) THEN ''
+                ELSE episodes.availability_message
             END,
             source_file = CASE
                 WHEN episodes.source_file = '' THEN excluded.source_file
@@ -295,10 +326,15 @@ def upsert_episode(
     source_file = source_file or audio_path.name
     database.execute(
         """
-        INSERT INTO episodes (id, title, transcript_status, source_file)
-        VALUES (?, ?, 'available', ?)
+        INSERT INTO episodes (
+            id, title, transcript_status, media_status,
+            availability_message, source_file
+        )
+        VALUES (?, ?, 'available', 'available', '', ?)
         ON CONFLICT(id) DO UPDATE SET
             transcript_status = 'available',
+            media_status = 'available',
+            availability_message = '',
             source_file = excluded.source_file,
             updated_at = CURRENT_TIMESTAMP
         """,
@@ -334,6 +370,28 @@ def upsert_episode(
         (episode_id, transcript_path.name, transcript),
     )
     return episode_id
+
+
+def mark_episode_unavailable(
+    database: sqlite3.Connection,
+    episode_id: str,
+    message: str,
+) -> None:
+    """Persist publisher-level unavailability without replacing a transcript."""
+    database.execute(
+        """
+        UPDATE episodes
+        SET media_status = 'unavailable',
+            availability_message = ?,
+            updated_at = CURRENT_TIMESTAMP
+        WHERE id = ?
+          AND NOT EXISTS (
+              SELECT 1 FROM episode_transcripts
+              WHERE episode_id = episodes.id AND trim(transcript) != ''
+          )
+        """,
+        (message.strip(), episode_id),
+    )
 
 
 def vector_key_for(audio_path: Path) -> str:

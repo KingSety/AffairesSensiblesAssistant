@@ -13,6 +13,21 @@ struct EpisodeDetailView: View {
             VStack(alignment: .leading, spacing: 20) {
                 EpisodeHeaderCard(episode: episode)
 
+                if episode.mediaUnavailable {
+                    ContentUnavailableView(
+                        "Episode unavailable",
+                        systemImage: "waveform.slash",
+                        description: Text(
+                            episode.availabilityMessage.isEmpty
+                                ? "This episode is no longer available from Radio France, so a transcript could not be created."
+                                : episode.availabilityMessage
+                        )
+                    )
+                    .frame(maxWidth: .infinity)
+                    .padding()
+                    .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 18))
+                }
+
                 VStack(alignment: .leading, spacing: 12) {
                     Text("Episode Tools")
                         .font(.headline)
@@ -120,10 +135,10 @@ private struct EpisodeHeaderCard: View {
             .clipShape(RoundedRectangle(cornerRadius: 18))
             .overlay(alignment: .topTrailing) {
                 HStack(spacing: 6) {
-                    Image(systemName: episode.transcriptAvailable ? "checkmark.circle.fill" : "xmark.circle.fill")
+                    Image(systemName: statusIcon)
                         .imageScale(.small)
-                        .foregroundStyle(episode.transcriptAvailable ? .green : .secondary)
-                    Text(episode.transcriptAvailable ? "Transcript Available" : "Transcript Not Available")
+                        .foregroundStyle(statusColor)
+                    Text(statusText)
                         .font(.caption.weight(.semibold))
                         .foregroundStyle(.primary)
                 }
@@ -155,5 +170,20 @@ private struct EpisodeHeaderCard: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding()
         .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 20))
+    }
+
+    private var statusIcon: String {
+        if episode.mediaUnavailable { return "exclamationmark.triangle.fill" }
+        return episode.transcriptAvailable ? "checkmark.circle.fill" : "xmark.circle.fill"
+    }
+
+    private var statusText: String {
+        if episode.mediaUnavailable { return "Episode Unavailable" }
+        return episode.transcriptAvailable ? "Transcript Available" : "Transcript Not Available"
+    }
+
+    private var statusColor: Color {
+        if episode.mediaUnavailable { return .orange }
+        return episode.transcriptAvailable ? .green : .secondary
     }
 }

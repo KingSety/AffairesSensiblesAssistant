@@ -119,6 +119,12 @@ private struct EpisodeRow: View {
                 }
                 .font(.caption)
                 .foregroundStyle(.tertiary)
+
+                if episode.mediaUnavailable {
+                    Label("Unavailable", systemImage: "waveform.slash")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.orange)
+                }
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)

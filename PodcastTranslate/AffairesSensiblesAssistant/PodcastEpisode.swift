@@ -11,6 +11,8 @@ struct PodcastEpisode: Identifiable, Equatable, Sendable {
     let publishedDate: String?
     let durationSeconds: Int?
     let transcriptAvailable: Bool
+    let mediaUnavailable: Bool
+    let availabilityMessage: String
 
     init(metadata: EpisodeMetadata) {
         id = metadata.id
@@ -22,6 +24,8 @@ struct PodcastEpisode: Identifiable, Equatable, Sendable {
         publishedDate = metadata.publishedDate
         durationSeconds = metadata.durationSeconds
         transcriptAvailable = metadata.transcriptAvailable
+        mediaUnavailable = metadata.mediaAvailability == .unavailable
+        availabilityMessage = metadata.availabilityMessage
     }
 
     var durationText: String {
