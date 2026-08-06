@@ -6,6 +6,7 @@
 //
 
 import SwiftUI
+import UserNotifications
 
 struct SettingsView: View {
     private let responseLengths = ["Short", "Medium", "Long"]
@@ -25,7 +26,22 @@ struct SettingsView: View {
                 profileSection
                 preferenceSection
                 aiPreferenceSection
-
+                Section("Notifications") {
+                    Toggle("Enable Notifications", isOn: $notificationsEnabled)
+                        .onChange(of: notificationsEnabled) { enabled in
+                            NotificationManager.handleSettingChange(enabled: enabled)
+                        }
+                        .onAppear {
+                            // Keep the toggle state in sync with system permission changes
+                            UNUserNotificationCenter.current().getNotificationSettings { settings in
+                                DispatchQueue.main.async {
+                                    if settings.authorizationStatus == .denied {
+                                        notificationsEnabled = false
+                                    }
+                                }
+                            }
+                        }
+                }
             }
         }
     }
@@ -39,7 +55,9 @@ struct SettingsView: View {
     private var preferenceSection: some View {
         Section("Preferences") {
             Toggle("Dark Mode", isOn: $isDarkMode)
+            
         }
+        .preferredColorScheme(isDarkMode ? .dark : .light)
     }
     
     private var aiPreferenceSection: some View {

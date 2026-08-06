@@ -67,6 +67,9 @@ struct LibraryView: View {
         .task {
             loadEpisodes()
         }
+        .onAppear {
+            NotificationManager.clearDeliveredForEpisodeSummary()
+        }
     }
 
     private func loadEpisodes() {

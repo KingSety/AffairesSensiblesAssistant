@@ -1,3 +1,4 @@
+import UserNotifications
 import SwiftUI
 
 struct EpisodeDetailView: View {
@@ -7,6 +8,8 @@ struct EpisodeDetailView: View {
     @State private var isGenerating = false
     @State private var errorMessage: String?
     @State private var usedDescriptionFallback = false
+    @State private var summaryKind: EpisodeSummaryOutputKind = .generatedSummary
+    @State private var summaryNotice: String?
 
     var body: some View {
         ScrollView {
@@ -58,13 +61,19 @@ struct EpisodeDetailView: View {
 
                 if let generatedText {
                     VStack(alignment: .leading, spacing: 10) {
-                        Label("Summary", systemImage: "text.alignleft")
+                        Label(summaryKind.title, systemImage: "text.alignleft")
                             .font(.headline)
 
                         Text(generatedText)
                             .textSelection(.enabled)
 
-                        if !episode.transcriptAvailable && usedDescriptionFallback {
+                        if let summaryNotice {
+                            Text(summaryNotice)
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+
+                        if !episode.transcriptAvailable && usedDescriptionFallback && summaryNotice == nil {
                             Text("Based on the imported episode description. Add a Deepgram transcript for a full content summary.")
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
@@ -99,13 +108,19 @@ struct EpisodeDetailView: View {
         generatedText = nil
         errorMessage = nil
         usedDescriptionFallback = false
+        summaryKind = .generatedSummary
+        summaryNotice = nil
         isGenerating = true
 
         Task {
             do {
                 let input = try await LocalTranscriptService.generationInput(for: episode)
                 usedDescriptionFallback = input.source == .description
-                generatedText = try await OnDeviceLanguageService.generate(input: input)
+                let result = try await OnDeviceLanguageService.generate(input: input)
+                generatedText = result.text
+                summaryKind = result.kind
+                summaryNotice = result.notice
+                NotificationManager.notifyEpisodeSummaryReady(episodeTitle: episode.title)
             } catch {
                 errorMessage = error.localizedDescription
             }

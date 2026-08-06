@@ -7,6 +7,7 @@
 
 import LocalVectorSearch
 import SwiftUI
+import UserNotifications
 
 struct HomeView: View {
     @State private var userInput = ""
@@ -87,6 +88,7 @@ struct HomeView: View {
                 updateQuery(id: queryID) { searchQuery in
                     searchQuery.results = results
                     searchQuery.isSearching = false
+                    NotificationManager.notifyAssistantResultsReady(query: query)
                 }
             } catch {
                 updateQuery(id: queryID) { searchQuery in
@@ -237,3 +239,4 @@ private struct TranscriptView: View {
 #Preview {
     HomeView()
 }
+
