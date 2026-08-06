@@ -152,6 +152,7 @@ public final class EpisodeDatabase {
             """
             SELECT e.id, e.title, e.short_description, e.source_url,
                    e.artwork_url, e.language, e.published_date, e.duration_seconds,
+                   e.media_status, e.availability_message,
                    EXISTS (
                        SELECT 1 FROM episode_transcripts AS t
                        WHERE t.episode_id = e.id AND trim(t.transcript) != ''
@@ -164,7 +165,14 @@ public final class EpisodeDatabase {
 
         var episodes: [EpisodeMetadata] = []
         while sqlite3_step(statement) == SQLITE_ROW {
-            episodes.append(episodeMetadata(from: statement, transcriptFlagColumn: 8))
+            episodes.append(
+                episodeMetadata(
+                    from: statement,
+                    transcriptFlagColumn: 10,
+                    mediaStatusColumn: 8,
+                    availabilityMessageColumn: 9
+                )
+            )
         }
         try checkLastStep(statement)
         return episodes
@@ -754,7 +762,7 @@ public final class EpisodeDatabase {
             ON transcript_vector_index_edges(source_episode_id, source_chunk_index, level, rank)
             """
         )
-        try execute("PRAGMA user_version = 2")
+        try execute("PRAGMA user_version = 3")
     }
 
     private func createEpisodeTables() throws {
@@ -772,6 +780,9 @@ public final class EpisodeDatabase {
                 catalog_position INTEGER NOT NULL DEFAULT 0,
                 transcript_status TEXT NOT NULL DEFAULT 'missing'
                     CHECK (transcript_status IN ('available', 'description_only', 'missing')),
+                media_status TEXT NOT NULL DEFAULT 'unknown'
+                    CHECK (media_status IN ('available', 'unavailable', 'unknown')),
+                availability_message TEXT NOT NULL DEFAULT '',
                 source_file TEXT NOT NULL DEFAULT '',
                 updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
             )
@@ -795,6 +806,19 @@ public final class EpisodeDatabase {
         if try !columnExists(named: "catalog_position", in: "episodes") {
             try execute(
                 "ALTER TABLE episodes ADD COLUMN catalog_position INTEGER NOT NULL DEFAULT 0"
+            )
+        }
+        if try !columnExists(named: "media_status", in: "episodes") {
+            try execute(
+                "ALTER TABLE episodes ADD COLUMN media_status TEXT NOT NULL "
+                    + "DEFAULT 'unknown' CHECK (media_status IN "
+                    + "('available', 'unavailable', 'unknown'))"
+            )
+        }
+        if try !columnExists(named: "availability_message", in: "episodes") {
+            try execute(
+                "ALTER TABLE episodes ADD COLUMN availability_message "
+                    + "TEXT NOT NULL DEFAULT ''"
             )
         }
         try execute(
@@ -821,12 +845,14 @@ public final class EpisodeDatabase {
                 """
                 INSERT INTO episodes (
                     id, title, short_description, source_url, artwork_url,
-                    language, transcript_status, source_file, updated_at
+                    language, transcript_status, media_status,
+                    availability_message, source_file, updated_at
                 )
                 SELECT id, source_file, '', '', '',
                        COALESCE(NULLIF(embedding_language, ''), 'fr'),
                        CASE WHEN trim(transcript) = '' THEN 'missing' ELSE 'available' END,
-                       source_file, updated_at
+                       CASE WHEN trim(transcript) = '' THEN 'unknown' ELSE 'available' END,
+                       '', source_file, updated_at
                 FROM episodes_legacy
                 """
             )
@@ -931,9 +957,14 @@ public final class EpisodeDatabase {
 
     private func episodeMetadata(
         from statement: OpaquePointer,
-        transcriptFlagColumn: Int32? = nil
+        transcriptFlagColumn: Int32? = nil,
+        mediaStatusColumn: Int32? = nil,
+        availabilityMessageColumn: Int32? = nil
     ) -> EpisodeMetadata {
-        EpisodeMetadata(
+        let mediaAvailability = mediaStatusColumn.flatMap {
+            EpisodeMediaAvailability(rawValue: text(statement, $0))
+        } ?? (transcriptFlagColumn == nil ? .available : .unknown)
+        return EpisodeMetadata(
             id: text(statement, 0),
             title: text(statement, 1),
             shortDescription: text(statement, 2),
@@ -944,7 +975,11 @@ public final class EpisodeDatabase {
             durationSeconds: optionalInt(statement, 7),
             transcriptAvailable: transcriptFlagColumn.map {
                 sqlite3_column_int(statement, $0) != 0
-            } ?? true
+            } ?? true,
+            mediaAvailability: mediaAvailability,
+            availabilityMessage: availabilityMessageColumn.map {
+                text(statement, $0)
+            } ?? ""
         )
     }
 

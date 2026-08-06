@@ -1,5 +1,11 @@
 import Foundation
 
+public enum EpisodeMediaAvailability: String, Sendable, Equatable {
+    case available
+    case unavailable
+    case unknown
+}
+
 public struct EpisodeMetadata: Identifiable, Sendable, Equatable {
     public let id: String
     public let title: String
@@ -10,6 +16,8 @@ public struct EpisodeMetadata: Identifiable, Sendable, Equatable {
     public let publishedDate: String?
     public let durationSeconds: Int?
     public let transcriptAvailable: Bool
+    public let mediaAvailability: EpisodeMediaAvailability
+    public let availabilityMessage: String
 }
 
 public struct Episode: Identifiable, Sendable, Equatable {

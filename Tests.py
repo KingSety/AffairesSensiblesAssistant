@@ -9,13 +9,20 @@ from deepgram.core.api_error import ApiError
 from deepgram_api import (
     get_api_key,
     initialize_database,
+    mark_episode_unavailable,
     sync_catalog,
     transcribe_file,
     transcribe_url,
     upsert_episode,
     vector_key_for,
 )
-from download import download_file, resolve_audio_url
+from download import (
+    EpisodeAudioResolver,
+    MediaUnavailableError,
+    RadioFranceRSSResolver,
+    download_file,
+    resolve_audio_url,
+)
 
 
 def test_url_validation():
@@ -73,6 +80,61 @@ def test_resolve_audio_url(tmp_path):
     assert audio_url == "https://cdn.example/audio.m4a"
     downloader.extract_info.assert_called_once_with(url, download=False)
 
+
+def test_episode_audio_resolver_prefers_local_audio(tmp_path):
+    local_audio = tmp_path / "8750596.mp3"
+    local_audio.write_bytes(b"audio")
+    resolver = EpisodeAudioResolver(audio_dir=tmp_path)
+
+    resolved = resolver.resolve(
+        {
+            "id": "catalog-id",
+            "title": "Charles Hernu",
+            "source_url": "https://www.radiofrance.fr/example-8750596",
+        }
+    )
+
+    assert resolved.location == local_audio
+    assert resolved.source == "local audio"
+
+
+def test_rss_resolver_matches_unique_episode_title():
+    feed = b"""<?xml version="1.0"?>
+    <rss><channel><item>
+      <title>Episode title</title>
+      <link>https://www.radiofrance.fr/example</link>
+      <enclosure url="https://cdn.example/episode.m4a" type="audio/x-m4a" />
+    </item></channel></rss>"""
+    response = Mock(content=feed)
+    response.raise_for_status.return_value = None
+
+    with patch("download.httpx.get", return_value=response):
+        resolver = RadioFranceRSSResolver("https://example.com/feed.xml")
+        result = resolver.resolve(
+            {
+                "title": "Episode title",
+                "source_url": "https://www.radiofrance.fr/different-link",
+            }
+        )
+
+    assert result == "https://cdn.example/episode.m4a"
+
+
+def test_episode_audio_resolver_marks_missing_publisher_audio_unavailable():
+    resolver = EpisodeAudioResolver(audio_dir=None)
+    resolver.rss._entries = []
+
+    with patch(
+        "download.resolve_audio_url",
+        side_effect=Exception("Unable to extract audio data"),
+    ), pytest.raises(MediaUnavailableError, match="no longer available"):
+        resolver.resolve(
+            {
+                "title": "Unavailable episode",
+                "source_url": "https://www.radiofrance.fr/example-1234567",
+            }
+        )
+
 def test_missing_api_key(monkeypatch):
     monkeypatch.delenv("DEEPGRAM_API_KEY", raising=False)
 
@@ -129,6 +191,8 @@ def test_initialize_database_creates_episode_schema(tmp_path):
         "catalog_position",
         "source_file",
         "transcript_status",
+        "media_status",
+        "availability_message",
     }.issubset(columns)
     assert {
         "episode_id",
@@ -248,6 +312,41 @@ def test_sync_catalog_keeps_every_episode_and_marks_transcript_availability(tmp_
         ("missing", "Missing text", "missing"),
         ("transcribed", "Transcribed episode", "available"),
     ]
+
+
+def test_unavailable_status_survives_catalog_sync_and_clears_after_transcription(tmp_path):
+    catalog = [
+        {
+            "id": "episode-id",
+            "title": "Unavailable episode",
+            "description": "Description",
+            "source_url": "https://example.com/episode",
+        }
+    ]
+
+    with initialize_database(tmp_path / "episodes.sqlite") as database:
+        sync_catalog(database, catalog)
+        mark_episode_unavailable(database, "episode-id", "Episode unavailable")
+        sync_catalog(database, catalog)
+        unavailable = database.execute(
+            "SELECT media_status, availability_message FROM episodes WHERE id = ?",
+            ("episode-id",),
+        ).fetchone()
+
+        upsert_episode(
+            database,
+            Path("episode.m4a"),
+            Path("episode.txt"),
+            "Transcript",
+            episode_id="episode-id",
+        )
+        available = database.execute(
+            "SELECT media_status, availability_message FROM episodes WHERE id = ?",
+            ("episode-id",),
+        ).fetchone()
+
+    assert unavailable == ("unavailable", "Episode unavailable")
+    assert available == ("available", "")
 
 
 def test_initialize_database_migrates_legacy_transcript_and_removes_duplicate_summary(
