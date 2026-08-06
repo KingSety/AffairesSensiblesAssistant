@@ -5,7 +5,8 @@
 Before testing simulation, run the following commands inside the project directory:
 1. git lfs install
 2. git lfs pull
-3. confirm the database was downloaded using file ios/Resources/episodes.sqlite (should say SQLite database)
+3. confirm the database was downloaded using `file ios/Resources/episodes.sqlite`
+   (it should report a SQLite database)
 
 
 
@@ -15,8 +16,19 @@ Before testing simulation, run the following commands inside the project directo
 4. In the File inspector, confirm the application target is checked.
 5. In Build Phases > Copy Bundle Resources, confirm `episodes.sqlite` appears.
 
-The bundled database is read-only. Install it into Application Support before
-opening it for vector updates:
+The bundled database is the app's single read-only source for catalog metadata,
+available transcripts, and prebuilt indexes. Open it directly for normal app
+reads so launch does not copy the data pack:
+
+```swift
+let databaseURL = try EpisodeDatabase.bundledDatabaseURL()
+let database = try EpisodeDatabase(url: databaseURL, accessMode: .readOnly)
+let catalog = try database.fetchCatalogEpisodes()
+let transcript = try database.fetchTranscript(episodeID: catalog[0].id)
+```
+
+Only install it into Application Support when a writable copy is specifically
+needed for vector updates:
 
 ```swift
 import LocalVectorSearch

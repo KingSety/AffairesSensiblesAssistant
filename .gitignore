@@ -9,3 +9,4 @@ __pycache__/
 /Summaries/
 /transcript_import_failures.json
 /ios/Working/
+/ios/LocalVectorSearch/.build/

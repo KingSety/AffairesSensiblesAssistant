@@ -10,9 +10,7 @@ struct LocalTranscriptSearchResult: Identifiable, Sendable {
     var id: String { episode.id }
 
     var title: String {
-        podcast?.title ?? URL(fileURLWithPath: episode.sourceFile)
-            .deletingPathExtension()
-            .lastPathComponent
+        podcast?.title ?? episode.metadata.title
     }
 
     var excerpt: String {
@@ -57,18 +55,10 @@ enum LocalTranscriptServiceError: LocalizedError {
 enum LocalTranscriptService {
     private static let searchStore = LocalTranscriptSearchStore()
 
-    static func prepareSearchIndex() async throws {
-        try await searchStore.prepare()
-    }
-
     static func search(_ query: String, limit: Int = 8) async throws -> [LocalTranscriptSearchResult] {
         let databaseURL = try EpisodeDatabase.bundledDatabaseURL()
         let database = try EpisodeDatabase(url: databaseURL, accessMode: .readOnly)
-        let indexedEpisodeCount = try database.fetchAllEpisodes().reduce(into: 0) { count, episode in
-            if !episode.transcript.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                count += 1
-            }
-        }
+        let indexedEpisodeCount = try database.transcriptCount()
         guard indexedEpisodeCount > 1 else {
             throw LocalTranscriptServiceError.insufficientTranscripts(
                 indexedEpisodeCount: indexedEpisodeCount
@@ -76,21 +66,12 @@ enum LocalTranscriptService {
         }
 
         let matches = try await searchStore.search(query, limit: limit)
-        let catalog = try? EpisodeCatalog.load()
         return matches.sorted { $0.score > $1.score }.map { match in
-            let storedTitle = normalized(
-                URL(fileURLWithPath: match.episode.sourceFile)
-                    .deletingPathExtension()
-                    .lastPathComponent
-            )
-            return LocalTranscriptSearchResult(
+            LocalTranscriptSearchResult(
                 episode: match.episode,
                 score: match.score,
                 matchKind: match.matchKind,
-                podcast: catalog?.first { catalogEpisode in
-                    let catalogTitle = normalized(catalogEpisode.title)
-                    return storedTitle.contains(catalogTitle) || catalogTitle.contains(storedTitle)
-                },
+                podcast: PodcastEpisode(metadata: match.episode.metadata),
                 matchedExcerpt: match.excerpt
             )
         }
@@ -99,16 +80,7 @@ enum LocalTranscriptService {
     static func transcript(for episode: PodcastEpisode) async throws -> String? {
         let databaseURL = try EpisodeDatabase.bundledDatabaseURL()
         let database = try EpisodeDatabase(url: databaseURL, accessMode: .readOnly)
-        let normalizedTitle = normalized(episode.title)
-
-        return try database.fetchAllEpisodes().first { storedEpisode in
-            let storedTitle = normalized(
-                URL(fileURLWithPath: storedEpisode.sourceFile)
-                    .deletingPathExtension()
-                    .lastPathComponent
-            )
-            return storedTitle.contains(normalizedTitle) || normalizedTitle.contains(storedTitle)
-        }?.transcript
+        return try database.fetchTranscript(episodeID: episode.id)
     }
 
     static func generationInput(for episode: PodcastEpisode) async throws -> EpisodeGenerationInput {
@@ -125,21 +97,10 @@ enum LocalTranscriptService {
         }
         return EpisodeGenerationInput(text: description, source: .description)
     }
-
-    private static func normalized(_ value: String) -> String {
-        value.folding(options: [.diacriticInsensitive, .caseInsensitive], locale: .current)
-            .components(separatedBy: CharacterSet.alphanumerics.inverted)
-            .joined()
-    }
 }
 
 private actor LocalTranscriptSearchStore {
     private var search: LocalEpisodeSearch?
-
-    func prepare() async throws {
-        let search = try makeSearch()
-        try await search.prepareEmbeddings()
-    }
 
     func search(_ query: String, limit: Int) async throws -> [EpisodeSearchResult] {
         let search = try makeSearch()

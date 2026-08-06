@@ -4,14 +4,12 @@ from __future__ import annotations
 
 import argparse
 from contextlib import contextmanager
-import json
 import os
 from pathlib import Path
 import signal
 import sqlite3
 import subprocess
 import time
-from typing import Any
 
 from deepgram import DeepgramClient
 from dotenv import load_dotenv
@@ -21,6 +19,8 @@ from deepgram_api import (
     OUTPUT_DIR,
     get_api_key,
     initialize_database,
+    load_catalog,
+    sync_catalog,
     transcribe_url,
     upsert_episode,
 )
@@ -51,24 +51,7 @@ def episode_deadline(seconds: int):
         signal.signal(signal.SIGALRM, previous_handler)
 
 
-def load_catalog(catalog_path: Path) -> list[dict[str, Any]]:
-    payload = json.loads(catalog_path.read_text(encoding="utf-8"))
-    if not isinstance(payload, list):
-        raise ValueError(f"Catalog at {catalog_path} must contain an episode list.")
-
-    episodes: list[dict[str, Any]] = []
-    for item in payload:
-        if not isinstance(item, dict):
-            continue
-        required_fields = ("id", "title", "source_url")
-        if all(isinstance(item.get(field), str) and item[field].strip() for field in required_fields):
-            episodes.append(item)
-    if not episodes:
-        raise ValueError(f"Catalog at {catalog_path} has no valid episodes.")
-    return episodes
-
-
-def source_file_name(episode: dict[str, Any]) -> str:
+def source_file_name(episode: dict[str, object]) -> str:
     return f"{episode['title']}.m4a"
 
 
@@ -85,17 +68,32 @@ def is_permanently_unavailable_media(error: Exception) -> bool:
 
 
 def existing_episode_ids(database: sqlite3.Connection) -> set[str]:
-    return {row[0] for row in database.execute("SELECT id FROM episodes")}
+    return {
+        row[0]
+        for row in database.execute(
+            "SELECT episode_id FROM episode_transcripts WHERE trim(transcript) != ''"
+        )
+    }
 
 
 def existing_source_files(database: sqlite3.Connection) -> set[str]:
-    return {row[0] for row in database.execute("SELECT source_file FROM episodes")}
+    return {
+        row[0]
+        for row in database.execute(
+            """
+            SELECT e.source_file
+            FROM episodes AS e
+            JOIN episode_transcripts AS t ON t.episode_id = e.id
+            WHERE trim(t.transcript) != ''
+            """
+        )
+    }
 
 
 def transcribe_episode(
     database: sqlite3.Connection,
     deepgram: DeepgramClient,
-    episode: dict[str, Any],
+    episode: dict[str, object],
     retries: int,
     timeout_seconds: int,
 ) -> None:
@@ -218,6 +216,7 @@ def import_catalog(
     prepare_working_database(database_path, bundled_database_path)
 
     with initialize_database(database_path) as database:
+        sync_catalog(database, episodes)
         completed_ids = existing_episode_ids(database)
         completed_source_files = existing_source_files(database)
 

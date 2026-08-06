@@ -107,11 +107,14 @@ public final class EpisodeDatabase {
 
     public func fetchAllEpisodes() throws -> [Episode] {
         let sql = """
-            SELECT id, source_file, transcript_file, summary_file,
-                   transcript, summary, embedding, embedding_dimension,
-                   embedding_revision, embedding_language
-            FROM episodes
-            ORDER BY source_file
+            SELECT e.id, e.title, e.short_description, e.source_url,
+                   e.artwork_url, e.language, e.published_date, e.duration_seconds,
+                   e.source_file, t.transcript_file, t.transcript,
+                   t.embedding, t.embedding_dimension,
+                   t.embedding_revision, t.embedding_language
+            FROM episodes AS e
+            JOIN episode_transcripts AS t ON t.episode_id = e.id
+            ORDER BY e.source_file
             """
         let statement = try prepare(sql)
         defer { sqlite3_finalize(statement) }
@@ -119,8 +122,8 @@ public final class EpisodeDatabase {
         var episodes: [Episode] = []
         while sqlite3_step(statement) == SQLITE_ROW {
             let embeddingData: Data?
-            let byteCount = Int(sqlite3_column_bytes(statement, 6))
-            if byteCount > 0, let bytes = sqlite3_column_blob(statement, 6) {
+            let byteCount = Int(sqlite3_column_bytes(statement, 11))
+            if byteCount > 0, let bytes = sqlite3_column_blob(statement, 11) {
                 embeddingData = Data(bytes: bytes, count: byteCount)
             } else {
                 embeddingData = nil
@@ -129,20 +132,66 @@ public final class EpisodeDatabase {
             episodes.append(
                 Episode(
                     id: text(statement, 0),
-                    sourceFile: text(statement, 1),
-                    transcriptFile: text(statement, 2),
-                    summaryFile: text(statement, 3),
-                    transcript: text(statement, 4),
-                    summary: text(statement, 5),
-                    embeddingDimension: optionalInt(statement, 7),
-                    embeddingRevision: optionalInt(statement, 8),
-                    embeddingLanguage: optionalText(statement, 9),
+                    metadata: episodeMetadata(from: statement),
+                    sourceFile: text(statement, 8),
+                    transcriptFile: text(statement, 9),
+                    transcript: text(statement, 10),
+                    embeddingDimension: optionalInt(statement, 12),
+                    embeddingRevision: optionalInt(statement, 13),
+                    embeddingLanguage: optionalText(statement, 14),
                     embeddingData: embeddingData
                 )
             )
         }
         try checkLastStep(statement)
         return episodes
+    }
+
+    public func fetchCatalogEpisodes() throws -> [EpisodeMetadata] {
+        let statement = try prepare(
+            """
+            SELECT e.id, e.title, e.short_description, e.source_url,
+                   e.artwork_url, e.language, e.published_date, e.duration_seconds,
+                   EXISTS (
+                       SELECT 1 FROM episode_transcripts AS t
+                       WHERE t.episode_id = e.id AND trim(t.transcript) != ''
+                   )
+            FROM episodes AS e
+            ORDER BY e.catalog_position
+            """
+        )
+        defer { sqlite3_finalize(statement) }
+
+        var episodes: [EpisodeMetadata] = []
+        while sqlite3_step(statement) == SQLITE_ROW {
+            episodes.append(episodeMetadata(from: statement, transcriptFlagColumn: 8))
+        }
+        try checkLastStep(statement)
+        return episodes
+    }
+
+    public func transcriptCount() throws -> Int {
+        let statement = try prepare(
+            "SELECT COUNT(*) FROM episode_transcripts WHERE trim(transcript) != ''"
+        )
+        defer { sqlite3_finalize(statement) }
+        guard sqlite3_step(statement) == SQLITE_ROW else {
+            throw databaseError()
+        }
+        return Int(sqlite3_column_int64(statement, 0))
+    }
+
+    public func fetchTranscript(episodeID: String) throws -> String? {
+        let statement = try prepare(
+            "SELECT transcript FROM episode_transcripts WHERE episode_id = ? LIMIT 1"
+        )
+        defer { sqlite3_finalize(statement) }
+        try bindText(episodeID, to: 1, in: statement)
+
+        let result = sqlite3_step(statement)
+        if result == SQLITE_DONE { return nil }
+        guard result == SQLITE_ROW else { throw databaseError() }
+        return text(statement, 0)
     }
 
     public func transcriptChunkCount() throws -> Int {
@@ -194,9 +243,10 @@ public final class EpisodeDatabase {
         try execute(
             """
             INSERT INTO episode_transcript_search (episode_id, source_file, transcript)
-            SELECT id, source_file, transcript
-            FROM episodes
-            WHERE trim(transcript) != ''
+            SELECT e.id, e.source_file, t.transcript
+            FROM episodes AS e
+            JOIN episode_transcripts AS t ON t.episode_id = e.id
+            WHERE trim(t.transcript) != ''
             """
         )
     }
@@ -253,10 +303,11 @@ public final class EpisodeDatabase {
     func fetchEmbeddingRecords() throws -> [EpisodeEmbeddingRecord] {
         let statement = try prepare(
             """
-            SELECT id, transcript, embedding, embedding_dimension,
-                   embedding_revision, embedding_language
-            FROM episodes
-            ORDER BY source_file
+            SELECT t.episode_id, t.transcript, t.embedding, t.embedding_dimension,
+                   t.embedding_revision, t.embedding_language
+            FROM episode_transcripts AS t
+            JOIN episodes AS e ON e.id = t.episode_id
+            ORDER BY e.source_file
             """
         )
         defer { sqlite3_finalize(statement) }
@@ -472,11 +523,14 @@ public final class EpisodeDatabase {
     func fetchEpisode(id: String) throws -> Episode? {
         let statement = try prepare(
             """
-            SELECT id, source_file, transcript_file, summary_file,
-                   transcript, summary, embedding, embedding_dimension,
-                   embedding_revision, embedding_language
-            FROM episodes
-            WHERE id = ?
+            SELECT e.id, e.title, e.short_description, e.source_url,
+                   e.artwork_url, e.language, e.published_date, e.duration_seconds,
+                   e.source_file, t.transcript_file, t.transcript,
+                   t.embedding, t.embedding_dimension,
+                   t.embedding_revision, t.embedding_language
+            FROM episodes AS e
+            JOIN episode_transcripts AS t ON t.episode_id = e.id
+            WHERE e.id = ?
             LIMIT 1
             """
         )
@@ -490,15 +544,14 @@ public final class EpisodeDatabase {
         }
         return Episode(
             id: text(statement, 0),
-            sourceFile: text(statement, 1),
-            transcriptFile: text(statement, 2),
-            summaryFile: text(statement, 3),
-            transcript: text(statement, 4),
-            summary: text(statement, 5),
-            embeddingDimension: optionalInt(statement, 7),
-            embeddingRevision: optionalInt(statement, 8),
-            embeddingLanguage: optionalText(statement, 9),
-            embeddingData: blob(statement, 6)
+            metadata: episodeMetadata(from: statement),
+            sourceFile: text(statement, 8),
+            transcriptFile: text(statement, 9),
+            transcript: text(statement, 10),
+            embeddingDimension: optionalInt(statement, 12),
+            embeddingRevision: optionalInt(statement, 13),
+            embeddingLanguage: optionalText(statement, 14),
+            embeddingData: blob(statement, 11)
         )
     }
 
@@ -510,11 +563,11 @@ public final class EpisodeDatabase {
     ) throws {
         let statement = try prepare(
             """
-            UPDATE episodes
+            UPDATE episode_transcripts
             SET embedding = ?, embedding_dimension = ?,
                 embedding_revision = ?, embedding_language = ?,
                 updated_at = CURRENT_TIMESTAMP
-            WHERE id = ?
+            WHERE episode_id = ?
             """
         )
         defer { sqlite3_finalize(statement) }
@@ -600,11 +653,11 @@ public final class EpisodeDatabase {
     ) throws {
         let statement = try prepare(
             """
-            UPDATE episodes
+            UPDATE episode_transcripts
             SET embedding = NULL, embedding_dimension = NULL,
                 embedding_revision = ?, embedding_language = ?,
                 updated_at = CURRENT_TIMESTAMP
-            WHERE id = ?
+            WHERE episode_id = ?
             """
         )
         defer { sqlite3_finalize(statement) }
@@ -637,23 +690,12 @@ public final class EpisodeDatabase {
     }
 
     private func createSchema() throws {
-        try execute(
-            """
-            CREATE TABLE IF NOT EXISTS episodes (
-                id TEXT PRIMARY KEY,
-                source_file TEXT NOT NULL,
-                transcript_file TEXT NOT NULL,
-                summary_file TEXT NOT NULL,
-                transcript TEXT NOT NULL,
-                summary TEXT NOT NULL,
-                embedding BLOB,
-                embedding_dimension INTEGER,
-                embedding_revision INTEGER,
-                embedding_language TEXT,
-                updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
-            )
-            """
-        )
+        try execute("PRAGMA foreign_keys = ON")
+        if try tableExists(named: "episodes"),
+           try columnExists(named: "transcript", in: "episodes") {
+            try migrateLegacyEpisodeSchema()
+        }
+        try createEpisodeTables()
         try execute(
             """
             CREATE TABLE IF NOT EXISTS episode_transcript_chunks (
@@ -712,6 +754,100 @@ public final class EpisodeDatabase {
             ON transcript_vector_index_edges(source_episode_id, source_chunk_index, level, rank)
             """
         )
+        try execute("PRAGMA user_version = 2")
+    }
+
+    private func createEpisodeTables() throws {
+        try execute(
+            """
+            CREATE TABLE IF NOT EXISTS episodes (
+                id TEXT PRIMARY KEY,
+                title TEXT NOT NULL,
+                short_description TEXT NOT NULL DEFAULT '',
+                source_url TEXT NOT NULL DEFAULT '',
+                artwork_url TEXT NOT NULL DEFAULT '',
+                language TEXT NOT NULL DEFAULT 'fr',
+                published_date TEXT,
+                duration_seconds INTEGER,
+                catalog_position INTEGER NOT NULL DEFAULT 0,
+                transcript_status TEXT NOT NULL DEFAULT 'missing'
+                    CHECK (transcript_status IN ('available', 'description_only', 'missing')),
+                source_file TEXT NOT NULL DEFAULT '',
+                updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+            )
+            """
+        )
+        try execute(
+            """
+            CREATE TABLE IF NOT EXISTS episode_transcripts (
+                episode_id TEXT PRIMARY KEY,
+                transcript_file TEXT NOT NULL DEFAULT '',
+                transcript TEXT NOT NULL,
+                embedding BLOB,
+                embedding_dimension INTEGER,
+                embedding_revision INTEGER,
+                embedding_language TEXT,
+                updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (episode_id) REFERENCES episodes(id) ON DELETE CASCADE
+            )
+            """
+        )
+        if try !columnExists(named: "catalog_position", in: "episodes") {
+            try execute(
+                "ALTER TABLE episodes ADD COLUMN catalog_position INTEGER NOT NULL DEFAULT 0"
+            )
+        }
+        try execute(
+            "CREATE INDEX IF NOT EXISTS episodes_source_file_idx ON episodes(source_file)"
+        )
+        try execute(
+            "CREATE INDEX IF NOT EXISTS episodes_published_date_idx "
+                + "ON episodes(published_date DESC)"
+        )
+        try execute(
+            "CREATE INDEX IF NOT EXISTS episodes_catalog_position_idx "
+                + "ON episodes(catalog_position)"
+        )
+    }
+
+    private func migrateLegacyEpisodeSchema() throws {
+        try execute("PRAGMA foreign_keys = OFF")
+        defer { try? execute("PRAGMA foreign_keys = ON") }
+        try execute("BEGIN IMMEDIATE TRANSACTION")
+        do {
+            try execute("ALTER TABLE episodes RENAME TO episodes_legacy")
+            try createEpisodeTables()
+            try execute(
+                """
+                INSERT INTO episodes (
+                    id, title, short_description, source_url, artwork_url,
+                    language, transcript_status, source_file, updated_at
+                )
+                SELECT id, source_file, '', '', '',
+                       COALESCE(NULLIF(embedding_language, ''), 'fr'),
+                       CASE WHEN trim(transcript) = '' THEN 'missing' ELSE 'available' END,
+                       source_file, updated_at
+                FROM episodes_legacy
+                """
+            )
+            try execute(
+                """
+                INSERT INTO episode_transcripts (
+                    episode_id, transcript_file, transcript, embedding,
+                    embedding_dimension, embedding_revision, embedding_language, updated_at
+                )
+                SELECT id, transcript_file, transcript, embedding,
+                       embedding_dimension, embedding_revision, embedding_language, updated_at
+                FROM episodes_legacy
+                WHERE trim(transcript) != ''
+                """
+            )
+            try execute("DROP TABLE episodes_legacy")
+            try execute("COMMIT")
+        } catch {
+            try? execute("ROLLBACK")
+            throw error
+        }
     }
 
     private func execute(_ sql: String) throws {
@@ -730,6 +866,16 @@ public final class EpisodeDatabase {
         if result == SQLITE_ROW { return true }
         if result == SQLITE_DONE { return false }
         throw databaseError()
+    }
+
+    private func columnExists(named name: String, in table: String) throws -> Bool {
+        let statement = try prepare("PRAGMA table_info(\(table))")
+        defer { sqlite3_finalize(statement) }
+        while sqlite3_step(statement) == SQLITE_ROW {
+            if text(statement, 1) == name { return true }
+        }
+        try checkLastStep(statement)
+        return false
     }
 
     private static func databaseSignature(
@@ -781,6 +927,25 @@ public final class EpisodeDatabase {
             return .database("The database is closed.")
         }
         return .database(String(cString: sqlite3_errmsg(handle)))
+    }
+
+    private func episodeMetadata(
+        from statement: OpaquePointer,
+        transcriptFlagColumn: Int32? = nil
+    ) -> EpisodeMetadata {
+        EpisodeMetadata(
+            id: text(statement, 0),
+            title: text(statement, 1),
+            shortDescription: text(statement, 2),
+            sourceURL: text(statement, 3),
+            artworkURL: text(statement, 4),
+            language: text(statement, 5),
+            publishedDate: optionalText(statement, 6),
+            durationSeconds: optionalInt(statement, 7),
+            transcriptAvailable: transcriptFlagColumn.map {
+                sqlite3_column_int(statement, $0) != 0
+            } ?? true
+        )
     }
 
     private func text(_ statement: OpaquePointer, _ index: Int32) -> String {

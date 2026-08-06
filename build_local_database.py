@@ -2,10 +2,13 @@ from pathlib import Path
 
 from deepgram_api import (
     AUDIO_DIR,
+    CATALOG_PATH,
     DATABASE_PATH,
     OUTPUT_DIR,
     initialize_database,
     is_audio_file,
+    load_catalog,
+    sync_catalog,
     upsert_episode,
 )
 
@@ -36,6 +39,8 @@ def build_database(database_path: Path = DATABASE_PATH) -> int:
     remove_existing_database(database_path)
     count = 0
     with initialize_database(database_path) as database:
+        if CATALOG_PATH.is_file():
+            sync_catalog(database, load_catalog())
         for transcript_path in transcript_paths:
             audio_path = find_audio_path(transcript_path.stem)
             upsert_episode(

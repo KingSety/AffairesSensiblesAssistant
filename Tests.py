@@ -9,6 +9,7 @@ from deepgram.core.api_error import ApiError
 from deepgram_api import (
     get_api_key,
     initialize_database,
+    sync_catalog,
     transcribe_file,
     transcribe_url,
     upsert_episode,
@@ -115,18 +116,30 @@ def test_initialize_database_creates_episode_schema(tmp_path):
         columns = {
             row[1] for row in database.execute("PRAGMA table_info(episodes)")
         }
+        transcript_columns = {
+            row[1]
+            for row in database.execute("PRAGMA table_info(episode_transcripts)")
+        }
 
     assert database_path.is_file()
     assert {
         "id",
+        "title",
+        "short_description",
+        "catalog_position",
         "source_file",
+        "transcript_status",
+    }.issubset(columns)
+    assert {
+        "episode_id",
         "transcript",
-        "summary",
         "embedding",
         "embedding_dimension",
         "embedding_revision",
         "embedding_language",
-    }.issubset(columns)
+    }.issubset(transcript_columns)
+    assert "transcript" not in columns
+    assert "summary" not in columns
 
 
 def test_upsert_episode_invalidates_embedding_when_transcript_changes(tmp_path):
@@ -142,10 +155,10 @@ def test_upsert_episode_invalidates_embedding_when_transcript_changes(tmp_path):
         )
         database.execute(
             """
-            UPDATE episodes
+            UPDATE episode_transcripts
             SET embedding = ?, embedding_dimension = 2,
                 embedding_revision = 1, embedding_language = 'fr'
-            WHERE id = ?
+            WHERE episode_id = ?
             """,
             (sqlite3.Binary(b"12345678"), episode_id),
         )
@@ -160,7 +173,7 @@ def test_upsert_episode_invalidates_embedding_when_transcript_changes(tmp_path):
             """
             SELECT embedding, embedding_dimension,
                    embedding_revision, embedding_language
-            FROM episodes WHERE id = ?
+            FROM episode_transcripts WHERE episode_id = ?
             """,
             (episode_id,),
         ).fetchone()
@@ -189,3 +202,96 @@ def test_upsert_episode_accepts_catalog_metadata(tmp_path):
         ).fetchone()
 
     assert row == ("catalog-id", "Catalog episode.m4a")
+
+
+def test_sync_catalog_keeps_every_episode_and_marks_transcript_availability(tmp_path):
+    catalog = [
+        {
+            "id": "transcribed",
+            "title": "Transcribed episode",
+            "description": "A short description",
+            "source_url": "https://example.com/transcribed",
+            "artwork_url": "https://example.com/art.jpg",
+            "language": "fr",
+            "published_date": "2026-01-01",
+            "duration_seconds": 1200,
+        },
+        {
+            "id": "description-only",
+            "title": "Description only",
+            "description": "Short description",
+            "source_url": "https://example.com/description",
+        },
+        {
+            "id": "missing",
+            "title": "Missing text",
+            "description": "",
+            "source_url": "https://example.com/missing",
+        },
+    ]
+
+    with initialize_database(tmp_path / "episodes.sqlite") as database:
+        upsert_episode(
+            database,
+            Path("transcribed.m4a"),
+            Path("transcribed.txt"),
+            "Full transcript",
+            episode_id="transcribed",
+        )
+        sync_catalog(database, catalog)
+        rows = database.execute(
+            "SELECT id, title, transcript_status FROM episodes ORDER BY id"
+        ).fetchall()
+
+    assert rows == [
+        ("description-only", "Description only", "description_only"),
+        ("missing", "Missing text", "missing"),
+        ("transcribed", "Transcribed episode", "available"),
+    ]
+
+
+def test_initialize_database_migrates_legacy_transcript_and_removes_duplicate_summary(
+    tmp_path,
+):
+    database_path = tmp_path / "episodes.sqlite"
+    with sqlite3.connect(database_path) as database:
+        database.execute(
+            """
+            CREATE TABLE episodes (
+                id TEXT PRIMARY KEY,
+                source_file TEXT NOT NULL,
+                transcript_file TEXT NOT NULL,
+                summary_file TEXT NOT NULL,
+                transcript TEXT NOT NULL,
+                summary TEXT NOT NULL,
+                embedding BLOB,
+                embedding_dimension INTEGER,
+                embedding_revision INTEGER,
+                embedding_language TEXT,
+                updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+            )
+            """
+        )
+        database.execute(
+            """
+            INSERT INTO episodes (
+                id, source_file, transcript_file, summary_file, transcript, summary
+            ) VALUES ('episode-id', 'Episode.m4a', 'Episode.txt', 'Episode.txt',
+                      'Full transcript', 'Full transcript')
+            """
+        )
+
+    with initialize_database(database_path) as database:
+        episode = database.execute(
+            "SELECT id, transcript_status FROM episodes"
+        ).fetchone()
+        transcript = database.execute(
+            "SELECT episode_id, transcript FROM episode_transcripts"
+        ).fetchone()
+        columns = {
+            row[1] for row in database.execute("PRAGMA table_info(episodes)")
+        }
+
+    assert episode == ("episode-id", "available")
+    assert transcript == ("episode-id", "Full transcript")
+    assert "summary" not in columns

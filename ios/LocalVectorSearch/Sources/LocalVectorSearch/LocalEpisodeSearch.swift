@@ -24,10 +24,18 @@ public actor LocalEpisodeSearch {
 
     public func prepareEmbeddings() throws {
         guard !isPrepared else { return }
+        let shouldValidateStoredIndex: Bool
+        switch databaseAccessMode {
+        case .readOnly:
+            shouldValidateStoredIndex = false
+        case .readWrite:
+            shouldValidateStoredIndex = true
+        }
 
         if let storedIndex = try database.fetchApproximateIndexMetadata(),
            let embedder,
-           try isCompatible(storedIndex, using: embedder) {
+           metadataIsCompatible(storedIndex, using: embedder),
+           try (!shouldValidateStoredIndex || isCompatible(storedIndex, using: embedder)) {
             if databaseAccessMode == .readWrite,
                try database.transcriptTextIndexCount() != storedIndex.nodeCount {
                 try database.beginTransaction()
@@ -205,17 +213,20 @@ public actor LocalEpisodeSearch {
         _ metadata: ApproximateIndexMetadata,
         using embedder: AppleSentenceEmbedder
     ) throws -> Bool {
-        guard metadata.embeddingRevision == embedder.transcriptEmbeddingRevision,
-              metadata.embeddingLanguage == embedder.language.rawValue,
-              metadata.embeddingDimension == embedder.dimension
-        else {
-            return false
-        }
         return try database.compatibleTranscriptChunkCount(
             revision: metadata.embeddingRevision,
             language: metadata.embeddingLanguage,
             dimension: metadata.embeddingDimension
         ) == metadata.nodeCount
+    }
+
+    private func metadataIsCompatible(
+        _ metadata: ApproximateIndexMetadata,
+        using embedder: AppleSentenceEmbedder
+    ) -> Bool {
+        metadata.embeddingRevision == embedder.transcriptEmbeddingRevision
+            && metadata.embeddingLanguage == embedder.language.rawValue
+            && metadata.embeddingDimension == embedder.dimension
     }
 
     private func transcriptChunks(from transcript: String) -> [String] {

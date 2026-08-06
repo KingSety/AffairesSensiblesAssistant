@@ -1,9 +1,11 @@
 import hashlib
+import json
 import mimetypes
 import os
 from pathlib import Path
 import sqlite3
 import sys
+from typing import Any, Iterable
 
 import httpx
 from deepgram import DeepgramClient
@@ -33,6 +35,8 @@ OUTPUT_DIR = ROOT_DIR / "Transcripts"
 OUTPUT_DIR.mkdir(exist_ok=True)
 IOS_RESOURCES_DIR = ROOT_DIR / "ios" / "Resources"
 DATABASE_PATH = IOS_RESOURCES_DIR / "episodes.sqlite"
+CATALOG_PATH = IOS_RESOURCES_DIR / "imported_episodes.json"
+DATABASE_SCHEMA_VERSION = 2
 
 # Common audio/video extensions we want to accept
 AUDIO_EXTENSIONS = {
@@ -85,33 +89,195 @@ def transcribe_url(deepgram, audio_url: str):
     return response.results.channels[0].alternatives[0].transcript
 
 
-def initialize_database(database_path: Path = DATABASE_PATH) -> sqlite3.Connection:
-    database_path.parent.mkdir(parents=True, exist_ok=True)
-    database = sqlite3.connect(database_path)
+def _table_columns(database: sqlite3.Connection, table: str) -> set[str]:
+    return {row[1] for row in database.execute(f"PRAGMA table_info({table})")}
+
+
+def _create_episode_schema(database: sqlite3.Connection) -> None:
     database.execute(
         """
         CREATE TABLE IF NOT EXISTS episodes (
             id TEXT PRIMARY KEY,
-            source_file TEXT NOT NULL,
-            transcript_file TEXT NOT NULL,
-            summary_file TEXT NOT NULL,
-            transcript TEXT NOT NULL,
-            summary TEXT NOT NULL,
-            embedding BLOB,
-            embedding_dimension INTEGER,
-            embedding_revision INTEGER,
-            embedding_language TEXT,
+            title TEXT NOT NULL,
+            short_description TEXT NOT NULL DEFAULT '',
+            source_url TEXT NOT NULL DEFAULT '',
+            artwork_url TEXT NOT NULL DEFAULT '',
+            language TEXT NOT NULL DEFAULT 'fr',
+            published_date TEXT,
+            duration_seconds INTEGER,
+            catalog_position INTEGER NOT NULL DEFAULT 0,
+            transcript_status TEXT NOT NULL DEFAULT 'missing'
+                CHECK (transcript_status IN ('available', 'description_only', 'missing')),
+            source_file TEXT NOT NULL DEFAULT '',
             updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
         )
         """
     )
     database.execute(
-        "CREATE INDEX IF NOT EXISTS episodes_source_file_idx "
-        "ON episodes(source_file)"
+        """
+        CREATE TABLE IF NOT EXISTS episode_transcripts (
+            episode_id TEXT PRIMARY KEY,
+            transcript_file TEXT NOT NULL DEFAULT '',
+            transcript TEXT NOT NULL,
+            embedding BLOB,
+            embedding_dimension INTEGER,
+            embedding_revision INTEGER,
+            embedding_language TEXT,
+            updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (episode_id) REFERENCES episodes(id) ON DELETE CASCADE
+        )
+        """
     )
-    database.execute("PRAGMA user_version = 1")
+    if "catalog_position" not in _table_columns(database, "episodes"):
+        database.execute(
+            "ALTER TABLE episodes ADD COLUMN catalog_position INTEGER NOT NULL DEFAULT 0"
+        )
+    database.execute(
+        "CREATE INDEX IF NOT EXISTS episodes_source_file_idx ON episodes(source_file)"
+    )
+    database.execute(
+        "CREATE INDEX IF NOT EXISTS episodes_published_date_idx "
+        "ON episodes(published_date DESC)"
+    )
+    database.execute(
+        "CREATE INDEX IF NOT EXISTS episodes_catalog_position_idx "
+        "ON episodes(catalog_position)"
+    )
+
+
+def _migrate_legacy_episode_schema(database: sqlite3.Connection) -> None:
+    columns = _table_columns(database, "episodes")
+    if not columns or "transcript" not in columns:
+        return
+
+    database.execute("PRAGMA foreign_keys = OFF")
+    database.execute("BEGIN IMMEDIATE")
+    try:
+        database.execute("ALTER TABLE episodes RENAME TO episodes_legacy")
+        _create_episode_schema(database)
+        database.execute(
+            """
+            INSERT INTO episodes (
+                id, title, short_description, source_url, artwork_url,
+                language, transcript_status, source_file, updated_at
+            )
+            SELECT id, source_file, '', '', '',
+                   COALESCE(NULLIF(embedding_language, ''), 'fr'),
+                   CASE WHEN trim(transcript) = '' THEN 'missing' ELSE 'available' END,
+                   source_file, updated_at
+            FROM episodes_legacy
+            """
+        )
+        database.execute(
+            """
+            INSERT INTO episode_transcripts (
+                episode_id, transcript_file, transcript, embedding,
+                embedding_dimension, embedding_revision, embedding_language, updated_at
+            )
+            SELECT id, transcript_file, transcript, embedding,
+                   embedding_dimension, embedding_revision, embedding_language, updated_at
+            FROM episodes_legacy
+            WHERE trim(transcript) != ''
+            """
+        )
+        database.execute("DROP TABLE episodes_legacy")
+        database.execute(f"PRAGMA user_version = {DATABASE_SCHEMA_VERSION}")
+        database.commit()
+    except Exception:
+        database.rollback()
+        raise
+    finally:
+        database.execute("PRAGMA foreign_keys = ON")
+
+
+def initialize_database(database_path: Path = DATABASE_PATH) -> sqlite3.Connection:
+    database_path.parent.mkdir(parents=True, exist_ok=True)
+    database = sqlite3.connect(database_path)
+    _migrate_legacy_episode_schema(database)
+    database.execute("PRAGMA foreign_keys = ON")
+    _create_episode_schema(database)
+    database.execute(f"PRAGMA user_version = {DATABASE_SCHEMA_VERSION}")
     database.commit()
     return database
+
+
+def load_catalog(catalog_path: Path = CATALOG_PATH) -> list[dict[str, Any]]:
+    payload = json.loads(catalog_path.read_text(encoding="utf-8"))
+    if not isinstance(payload, list):
+        raise ValueError(f"Catalog at {catalog_path} must contain an episode list.")
+
+    episodes: list[dict[str, Any]] = []
+    for item in payload:
+        if not isinstance(item, dict):
+            continue
+        required_fields = ("id", "title", "source_url")
+        if all(
+            isinstance(item.get(field), str) and item[field].strip()
+            for field in required_fields
+        ):
+            episodes.append(item)
+    if not episodes:
+        raise ValueError(f"Catalog at {catalog_path} has no valid episodes.")
+    return episodes
+
+
+def sync_catalog(
+    database: sqlite3.Connection,
+    episodes: Iterable[dict[str, Any]],
+) -> int:
+    rows = []
+    for position, episode in enumerate(episodes):
+        description = str(episode.get("description") or "").strip()
+        title = str(episode["title"]).strip()
+        rows.append(
+            (
+                str(episode["id"]),
+                title,
+                description,
+                str(episode.get("source_url") or ""),
+                str(episode.get("artwork_url") or ""),
+                str(episode.get("language") or "fr"),
+                episode.get("published_date"),
+                episode.get("duration_seconds"),
+                position,
+                "description_only" if description else "missing",
+                f"{title}.m4a",
+            )
+        )
+
+    database.executemany(
+        """
+        INSERT INTO episodes (
+            id, title, short_description, source_url, artwork_url, language,
+            published_date, duration_seconds, catalog_position,
+            transcript_status, source_file
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(id) DO UPDATE SET
+            title = excluded.title,
+            short_description = excluded.short_description,
+            source_url = excluded.source_url,
+            artwork_url = excluded.artwork_url,
+            language = excluded.language,
+            published_date = excluded.published_date,
+            duration_seconds = excluded.duration_seconds,
+            catalog_position = excluded.catalog_position,
+            transcript_status = CASE
+                WHEN EXISTS (
+                    SELECT 1 FROM episode_transcripts
+                    WHERE episode_id = excluded.id AND trim(transcript) != ''
+                ) THEN 'available'
+                ELSE excluded.transcript_status
+            END,
+            source_file = CASE
+                WHEN episodes.source_file = '' THEN excluded.source_file
+                ELSE episodes.source_file
+            END,
+            updated_at = CURRENT_TIMESTAMP
+        """,
+        rows,
+    )
+    database.commit()
+    return len(rows)
 
 
 def upsert_episode(
@@ -123,45 +289,49 @@ def upsert_episode(
     episode_id: str | None = None,
     source_file: str | None = None,
 ) -> str:
+    if not transcript.strip():
+        raise ValueError("Transcript must not be empty.")
     episode_id = episode_id or vector_key_for(audio_path)
     source_file = source_file or audio_path.name
     database.execute(
         """
-        INSERT INTO episodes (
-            id, source_file, transcript_file, summary_file, transcript, summary
-        ) VALUES (?, ?, ?, ?, ?, ?)
+        INSERT INTO episodes (id, title, transcript_status, source_file)
+        VALUES (?, ?, 'available', ?)
         ON CONFLICT(id) DO UPDATE SET
+            transcript_status = 'available',
             source_file = excluded.source_file,
+            updated_at = CURRENT_TIMESTAMP
+        """,
+        (episode_id, Path(source_file).stem, source_file),
+    )
+    database.execute(
+        """
+        INSERT INTO episode_transcripts (
+            episode_id, transcript_file, transcript
+        ) VALUES (?, ?, ?)
+        ON CONFLICT(episode_id) DO UPDATE SET
             transcript_file = excluded.transcript_file,
-            summary_file = excluded.summary_file,
             transcript = excluded.transcript,
-            summary = excluded.summary,
             embedding = CASE
-                WHEN episodes.transcript = excluded.transcript THEN episodes.embedding
+                WHEN episode_transcripts.transcript = excluded.transcript
+                THEN episode_transcripts.embedding
                 ELSE NULL
             END,
             embedding_dimension = CASE
-                WHEN episodes.transcript = excluded.transcript
-                THEN episodes.embedding_dimension ELSE NULL
+                WHEN episode_transcripts.transcript = excluded.transcript
+                THEN episode_transcripts.embedding_dimension ELSE NULL
             END,
             embedding_revision = CASE
-                WHEN episodes.transcript = excluded.transcript
-                THEN episodes.embedding_revision ELSE NULL
+                WHEN episode_transcripts.transcript = excluded.transcript
+                THEN episode_transcripts.embedding_revision ELSE NULL
             END,
             embedding_language = CASE
-                WHEN episodes.transcript = excluded.transcript
-                THEN episodes.embedding_language ELSE NULL
+                WHEN episode_transcripts.transcript = excluded.transcript
+                THEN episode_transcripts.embedding_language ELSE NULL
             END,
             updated_at = CURRENT_TIMESTAMP
         """,
-        (
-            episode_id,
-            source_file,
-            transcript_path.name,
-            transcript_path.name,
-            transcript,
-            transcript,
-        ),
+        (episode_id, transcript_path.name, transcript),
     )
     return episode_id
 
@@ -182,6 +352,8 @@ def main():
         )
 
     with initialize_database() as database:
+        if CATALOG_PATH.is_file():
+            sync_catalog(database, load_catalog())
         for audio_path in audio_files:
             try:
                 transcript = transcribe_file(deepgram, audio_path)

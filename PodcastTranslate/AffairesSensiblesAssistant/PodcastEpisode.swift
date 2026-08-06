@@ -1,6 +1,7 @@
 import Foundation
+import LocalVectorSearch
 
-struct PodcastEpisode: Codable, Identifiable, Equatable, Sendable {
+struct PodcastEpisode: Identifiable, Equatable, Sendable {
     let id: String
     let title: String
     let description: String
@@ -9,16 +10,18 @@ struct PodcastEpisode: Codable, Identifiable, Equatable, Sendable {
     let language: String
     let publishedDate: String?
     let durationSeconds: Int?
+    let transcriptAvailable: Bool
 
-    enum CodingKeys: String, CodingKey {
-        case id
-        case title
-        case description
-        case sourceURL = "source_url"
-        case artworkURL = "artwork_url"
-        case language
-        case publishedDate = "published_date"
-        case durationSeconds = "duration_seconds"
+    init(metadata: EpisodeMetadata) {
+        id = metadata.id
+        title = metadata.title
+        description = metadata.shortDescription
+        sourceURL = metadata.sourceURL
+        artworkURL = metadata.artworkURL
+        language = metadata.language
+        publishedDate = metadata.publishedDate
+        durationSeconds = metadata.durationSeconds
+        transcriptAvailable = metadata.transcriptAvailable
     }
 
     var durationText: String {
@@ -30,23 +33,10 @@ struct PodcastEpisode: Codable, Identifiable, Equatable, Sendable {
 }
 
 enum EpisodeCatalog {
-    enum CatalogError: LocalizedError {
-        case missing
-
-        var errorDescription: String? {
-            "The imported episode catalog is not in the app bundle."
-        }
-    }
-
     static func load() throws -> [PodcastEpisode] {
-        guard let url = Bundle.main.url(
-            forResource: "imported_episodes",
-            withExtension: "json"
-        ) else {
-            throw CatalogError.missing
-        }
-
-        return try JSONDecoder().decode([PodcastEpisode].self, from: Data(contentsOf: url))
+        let databaseURL = try EpisodeDatabase.bundledDatabaseURL()
+        let database = try EpisodeDatabase(url: databaseURL, accessMode: .readOnly)
+        return try database.fetchCatalogEpisodes().map(PodcastEpisode.init(metadata:))
     }
 
     static func matches(for query: String, limit: Int = 3) throws -> [PodcastEpisode] {

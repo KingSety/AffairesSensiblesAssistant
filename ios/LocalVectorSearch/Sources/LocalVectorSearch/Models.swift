@@ -1,12 +1,23 @@
 import Foundation
 
+public struct EpisodeMetadata: Identifiable, Sendable, Equatable {
+    public let id: String
+    public let title: String
+    public let shortDescription: String
+    public let sourceURL: String
+    public let artworkURL: String
+    public let language: String
+    public let publishedDate: String?
+    public let durationSeconds: Int?
+    public let transcriptAvailable: Bool
+}
+
 public struct Episode: Identifiable, Sendable, Equatable {
     public let id: String
+    public let metadata: EpisodeMetadata
     public let sourceFile: String
     public let transcriptFile: String
-    public let summaryFile: String
     public let transcript: String
-    public let summary: String
     public let embeddingDimension: Int?
     public let embeddingRevision: Int?
     public let embeddingLanguage: String?

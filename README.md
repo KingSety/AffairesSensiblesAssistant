@@ -1,7 +1,9 @@
 # Deepgram transcript pipeline with local iOS vector search
 
-This project transcribes audio/video with Deepgram and writes transcripts to a
-local SQLite database. The iOS app embeds and searches that text on-device.
+This project transcribes audio/video with Deepgram and writes catalog metadata,
+optional transcripts, and prebuilt search indexes to one local SQLite database.
+The iOS app searches that data pack on-device and loads transcript text only
+when a result or episode needs it.
 
 ## Python pipeline
 
@@ -32,6 +34,16 @@ python3 build_local_database.py
 Updating a transcript clears its old embedding so the iOS layer will regenerate
 a compatible vector.
 
+To merge catalog changes into SQLite without making any Deepgram requests, run:
+
+```bash
+python3 sync_catalog_database.py
+```
+
+This migrates legacy databases, stores one lightweight row for every catalog
+episode, stores available transcript text separately by episode ID, compacts the
+database, and publishes it to `ios/Resources/episodes.sqlite`.
+
 ### Import every catalog transcript
 
 To resolve each episode in `ios/Resources/imported_episodes.json`, have Deepgram
@@ -44,8 +56,9 @@ python3 import_catalog_transcripts.py
 The importer does not keep audio files. It writes to `ios/Working/episodes.sqlite`
 and atomically publishes a stable snapshot to `ios/Resources/episodes.sqlite`
 every five episodes, so Xcode never bundles a partially written database. It
-commits each episode individually, skips episodes already present in the working
-database, retries temporary failures, and records any final failures in
+syncs all catalog metadata before transcription, commits each transcript
+individually, skips transcripts already present in the working database, retries
+temporary failures, and records any final failures in
 `transcript_import_failures.json`. Re-run the same command to resume a stopped
 import. Once every catalog transcript has been saved, it also creates the
 HNSW-style chunk index before publishing the final database. This final step is
@@ -60,11 +73,12 @@ the iOS app:
 python3 podcast_scraper.py 'https://www.radiofrance.fr/franceinter/podcasts/affaires-sensibles?p=3'
 ```
 
-This writes `ios/Resources/imported_episodes.json`. Each item includes its
-title, French source language, artwork URL, episode URL, publication date, and
-duration. The Xcode project bundles this catalog in the `PodcastTranslate` app
-target. Listening progress is intentionally not scraped: it belongs to each
-user's device and is recorded by the app during playback.
+This writes `ios/Resources/imported_episodes.json`. Each item includes its title,
+French source language, artwork URL, episode URL, publication date, and duration.
+The JSON file is a build-time import source; run `sync_catalog_database.py` to
+publish it into the SQLite data pack used by the app. Listening progress is
+intentionally not scraped: it belongs to each user's device and is recorded by
+the app during playback.
 
 To collect the full catalog rather than one page, use:
 
@@ -91,9 +105,9 @@ The Swift package in `ios/LocalVectorSearch` contains:
 
 See `ios/README.md` for Xcode integration and usage.
 
-No OpenAI service or Python backend is required by the iOS app. Build the
-index before bundling the database so the app opens a ready-to-search data pack
-without creating vectors or copying the library during onboarding:
+No OpenAI service or Python backend is required by the iOS app. Build the index
+before bundling the database so the app opens a ready-to-search data pack without
+creating vectors, copying the library, or loading every transcript at launch:
 
 
 Build the Swift package:
