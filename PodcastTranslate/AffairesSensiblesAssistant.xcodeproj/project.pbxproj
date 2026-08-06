@@ -8,7 +8,6 @@
 
 /* Begin PBXBuildFile section */
 		5DB088833014A0490055FEB9 /* LocalVectorSearch in Frameworks */ = {isa = PBXBuildFile; productRef = 5DB088823014A0490055FEB9 /* LocalVectorSearch */; };
-		5DB088A53016E0610055FEB9 /* imported_episodes.json in Resources */ = {isa = PBXBuildFile; fileRef = 5DB088A43016E0610055FEB9 /* imported_episodes.json */; };
 		5DB088A73016E0610055FEB9 /* episodes.sqlite in Resources */ = {isa = PBXBuildFile; fileRef = 5DB088A63016E0610055FEB9 /* episodes.sqlite */; };
 /* End PBXBuildFile section */
 
@@ -33,7 +32,6 @@
 		5DB088573013C3D30055FEB9 /* AffairesSensiblesAssistant.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = AffairesSensiblesAssistant.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		5DB088643013C3D40055FEB9 /* AffairesSensiblesAssistantTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = AffairesSensiblesAssistantTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		5DB0886E3013C3D40055FEB9 /* AffairesSensiblesAssistantUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = AffairesSensiblesAssistantUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
-		5DB088A43016E0610055FEB9 /* imported_episodes.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = imported_episodes.json; sourceTree = "<group>"; };
 		5DB088A63016E0610055FEB9 /* episodes.sqlite */ = {isa = PBXFileReference; lastKnownFileType = file; name = episodes.sqlite; path = ../ios/Resources/episodes.sqlite; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
@@ -84,7 +82,6 @@
 		5DB0884E3013C3D30055FEB9 = {
 			isa = PBXGroup;
 			children = (
-				5DB088A43016E0610055FEB9 /* imported_episodes.json */,
 				5DB088A63016E0610055FEB9 /* episodes.sqlite */,
 				5DB088593013C3D30055FEB9 /* AffairesSensiblesAssistant */,
 				5DB088673013C3D40055FEB9 /* AffairesSensiblesAssistantTests */,
@@ -227,7 +224,6 @@
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				5DB088A53016E0610055FEB9 /* imported_episodes.json in Resources */,
 				5DB088A73016E0610055FEB9 /* episodes.sqlite in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
