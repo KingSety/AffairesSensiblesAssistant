@@ -43,6 +43,8 @@ struct HomeView: View {
                             text: $userInput,
                             axis: .vertical
                         )
+                        .accessibilityLabel("Podcast search query.")
+                        .accessibilityIdentifier("podcast-search-query-field")
                         .lineLimit(1...4)
                         .focused($isComposerFocused)
                         .onSubmit {
@@ -58,7 +60,7 @@ struct HomeView: View {
                         .disabled(
                             userInput.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
                         )
-                        .accessibilityLabel("Find similar podcasts")
+                        .accessibilityIdentifier("podcast-search-submit-button")
                     }
                     .padding(12)
                     .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 18))
