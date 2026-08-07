@@ -1,8 +1,11 @@
 import UserNotifications
 import SwiftUI
+import FoundationModels
 
 struct EpisodeDetailView: View {
     let episode: PodcastEpisode
+
+    @EnvironmentObject private var aiAvailability: AIAvailability
 
     @State private var generatedText: String?
     @State private var isGenerating = false
@@ -45,11 +48,18 @@ struct EpisodeDetailView: View {
                         }
                     }
                     .buttonStyle(.borderedProminent)
-                    .disabled(isGenerating)
+                    .disabled(isGenerating || aiAvailability.shouldDisableAI)
+                    .opacity(aiAvailability.shouldDisableAI ? 0.5 : 1)
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding()
                 .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 18))
+
+                if aiAvailability.shouldDisableAI {
+                    Text(aiAvailability.reasonText() ?? "Apple Intelligence features are disabled.")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                }
 
                 if isGenerating {
                     HStack(spacing: 10) {

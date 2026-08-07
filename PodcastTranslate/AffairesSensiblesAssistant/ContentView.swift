@@ -6,8 +6,10 @@
 //
 
 import SwiftUI
+import FoundationModels
 
 struct ContentView: View {
+    @EnvironmentObject private var aiAvailability: AIAvailability
     private enum Tab { case home, library, settings }
     @State private var selectedTab: Tab = .home
 
@@ -43,6 +45,30 @@ struct ContentView: View {
         }
         .onAppear {
             NotificationManager.clearDeliveredForHomeAssistant()
+        }
+        .alert("Apple Intelligence not available", isPresented: .constant(!aiAvailability.isAvailable && !aiAvailability.userRefused)) {
+            let shouldShowOpenSettings: Bool = {
+                if case .unavailable(let reason) = aiAvailability.availability {
+                    return reason == .appleIntelligenceNotEnabled || reason == .modelNotReady
+                }
+                return false
+            }()
+
+            if shouldShowOpenSettings {
+                Button("Open Settings") {
+                    aiAvailability.clearRefusal()
+                    aiAvailability.openSettings()
+                }
+            }
+
+            Button("Not now", role: .cancel) {
+                aiAvailability.markRefused()
+            }
+        } message: {
+            Text(aiAvailability.reasonText() ?? "Apple Intelligence is currently unavailable.")
+        }
+        .task {
+            aiAvailability.refresh()
         }
     }
 }

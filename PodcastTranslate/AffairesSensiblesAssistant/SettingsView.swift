@@ -7,8 +7,11 @@
 
 import SwiftUI
 import UserNotifications
+import FoundationModels
 
 struct SettingsView: View {
+    @EnvironmentObject private var aiAvailability: AIAvailability
+    
     private let responseLengths = ["Short", "Medium", "Long"]
     
     @AppStorage("responseLength") private var responseLength = "Medium"
@@ -68,8 +71,14 @@ struct SettingsView: View {
                 }
             }
             Toggle("Include Sources/Timestamps", isOn: $includeSourcesAndTimestamps)
-            
+            if aiAvailability.shouldDisableAI {
+                Text(aiAvailability.reasonText() ?? "Apple Intelligence features are disabled.")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+            }
         }
+        .disabled(aiAvailability.shouldDisableAI)
+        .opacity(aiAvailability.shouldDisableAI ? 0.5 : 1)
     }
     
 }

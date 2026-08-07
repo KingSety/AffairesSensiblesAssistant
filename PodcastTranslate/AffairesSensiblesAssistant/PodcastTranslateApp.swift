@@ -6,6 +6,7 @@
 //
 
 import SwiftUI
+import FoundationModels
 
 @main
 struct AffairesSensibles: App {
@@ -14,9 +15,12 @@ struct AffairesSensibles: App {
         NotificationManager.requestAuthorizationIfEnabledSetting()
     }
     
+    @StateObject private var aiAvailability = AIAvailability()
+    
     var body: some Scene {
         WindowGroup {
             ContentView()
+                .environmentObject(aiAvailability)
         }
     }
 }
